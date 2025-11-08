@@ -670,10 +670,46 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                 if not tool_func:
                     print(f"DEBUG: Tool {tool_name} not in TOOL_REGISTRY, trying direct FastMCP access", flush=True)
                     try:
-                        # Try multiple ways to access and call the tool
-                        tools_dict = (getattr(app, '_tools', None) or 
-                                     getattr(app, 'tools', None) or 
-                                     getattr(app, '_tool_registry', None))
+                        # Method 1: Try FastMCP's call_tool if it exists
+                        if hasattr(app, 'call_tool'):
+                            try:
+                                if asyncio.iscoroutinefunction(app.call_tool):
+                                    # Async - would need to handle differently
+                                    pass
+                                else:
+                                    result = app.call_tool(tool_name, arguments)
+                                    if result is not None:
+                                        return {
+                                            "jsonrpc": "2.0",
+                                            "id": request_id,
+                                            "result": result
+                                        }
+                            except Exception as e:
+                                print(f"DEBUG: app.call_tool failed: {e}", flush=True)
+                        
+                        # Method 2: Try multiple ways to access FastMCP's tools dict
+                        tools_dict = None
+                        for attr_name in ['_tools', 'tools', '_tool_registry', 'tool_registry', '_handlers', 'handlers']:
+                            if hasattr(app, attr_name):
+                                attr_value = getattr(app, attr_name)
+                                if isinstance(attr_value, dict) and len(attr_value) > 0:
+                                    tools_dict = attr_value
+                                    print(f"DEBUG: Found tools in app.{attr_name} with {len(tools_dict)} items", flush=True)
+                                    break
+                        
+                        # Method 3: Search app.__dict__ for tools
+                        if not tools_dict:
+                            app_dict = vars(app) if hasattr(app, '__dict__') else {}
+                            for key, value in app_dict.items():
+                                if isinstance(value, dict) and len(value) > 0:
+                                    # Check if it looks like a tools dict
+                                    sample_keys = list(value.keys())[:5]
+                                    if all(isinstance(k, str) for k in sample_keys):
+                                        sample_value = list(value.values())[0]
+                                        if callable(sample_value) or (isinstance(sample_value, dict) and any(k in sample_value for k in ['handler', 'function', 'func', '_func'])):
+                                            tools_dict = value
+                                            print(f"DEBUG: Found potential tools dict in app.{key}", flush=True)
+                                            break
                         
                         if tools_dict and tool_name in tools_dict:
                             tool_info = tools_dict[tool_name]
@@ -684,7 +720,8 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                                 handler = (tool_info.get('handler') or 
                                           tool_info.get('function') or 
                                           tool_info.get('func') or
-                                          tool_info.get('_func'))
+                                          tool_info.get('_func') or
+                                          tool_info.get('callable'))
                             elif callable(tool_info):
                                 handler = tool_info
                             
@@ -698,6 +735,8 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                                         handler = handler._func
                                     elif hasattr(handler, 'func'):
                                         handler = handler.func
+                                    elif hasattr(handler, '__func__'):
+                                        handler = handler.__func__
                                     else:
                                         break
                                 
