@@ -1018,10 +1018,13 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             
             func_node = find_function(tree, func_name)
             if func_node:
-                print(f"✓ Found function {func_name} in AST")
+                print(f"✓ Found function {func_name} in AST of {source_file}")
                 # Found the function - extract parameters
                 properties = {}
                 required = []
+                
+                # Debug: print function args
+                print(f"  Function has {len(func_node.args.args)} parameters")
                 
                 # Get all parameters
                 args = func_node.args.args
@@ -1129,10 +1132,16 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                 if required:
                     schema["required"] = required
                 
+                print(f"  Extracted {len(properties)} properties for {func_name}")
                 return schema
             
-            # Function not found in AST
+            # Function not found in AST - list all function names for debugging
+            all_funcs = []
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef):
+                    all_funcs.append(node.name)
             print(f"Warning: Function {func_name} not found in AST of {source_file}")
+            print(f"  Available functions in file: {all_funcs[:10]}...")  # First 10
             return {"type": "object", "properties": {}}
             
         except Exception as e:
