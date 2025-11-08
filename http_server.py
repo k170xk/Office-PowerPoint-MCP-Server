@@ -20,10 +20,22 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Import the FastMCP app and necessary components
 # Import the entire module to ensure all tools are registered
-import ppt_mcp_server
-from ppt_mcp_server import app, presentations, current_presentation_id
-from presentation_manager import get_presentation_manager
-from storage_adapter import get_storage_adapter
+try:
+    import ppt_mcp_server
+    from ppt_mcp_server import app, presentations, current_presentation_id
+    from presentation_manager import get_presentation_manager
+    from storage_adapter import get_storage_adapter
+except ImportError as e:
+    print(f"ERROR: Failed to import required modules: {e}")
+    print("This usually means a dependency is missing. Check requirements.txt")
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
+except Exception as e:
+    print(f"ERROR: Unexpected error during import: {e}")
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
 
 # Track presentation_id to filename mapping for auto-save
 _presentation_files = {}  # Maps presentation_id to filename
