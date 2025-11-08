@@ -320,16 +320,27 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                         else:
                             tools_result = app.list_tools()
                         
-                        if tools_result and 'tools' in tools_result:
-                            fastmcp_tools = tools_result['tools']
+                        if tools_result:
+                            # Handle both dict response and direct tools list
+                            if isinstance(tools_result, dict) and 'tools' in tools_result:
+                                fastmcp_tools = tools_result['tools']
+                            elif isinstance(tools_result, list):
+                                fastmcp_tools = tools_result
+                            else:
+                                fastmcp_tools = []
+                            
                             if fastmcp_tools and len(fastmcp_tools) > 0:
-                                # Check if schemas are populated
-                                sample = fastmcp_tools[0]
-                                if sample.get('inputSchema', {}).get('properties'):
-                                    print(f"✓ Using FastMCP list_tools with {len(fastmcp_tools)} tools (schemas populated)")
+                                # Check if schemas are populated - count how many have properties
+                                tools_with_schemas = [t for t in fastmcp_tools if t.get('inputSchema', {}).get('properties')]
+                                if len(tools_with_schemas) >= len(fastmcp_tools) * 0.5:  # At least 50% have schemas
+                                    print(f"✓ Using FastMCP list_tools with {len(fastmcp_tools)} tools ({len(tools_with_schemas)} with schemas)")
                                     tools = fastmcp_tools
+                                else:
+                                    print(f"FastMCP list_tools returned {len(fastmcp_tools)} tools but only {len(tools_with_schemas)} have schemas, will use TOOL_REGISTRY")
                 except Exception as e:
                     print(f"FastMCP list_tools failed: {e}")
+                    import traceback
+                    traceback.print_exc()
                 
                 # Fallback: Use TOOL_REGISTRY with AST parsing for nested functions
                 if not tools or not any(t.get('inputSchema', {}).get('properties') for t in tools):
