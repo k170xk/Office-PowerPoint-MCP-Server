@@ -473,9 +473,11 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                             "inputSchema": schema
                         })
                     
-                    # Check how many have schemas
-                    schemas_count = sum(1 for t in tools if t.get('inputSchema', {}).get('properties'))
-                    print(f"TOOL_REGISTRY: {schemas_count}/{len(tools)} tools have schemas", flush=True)
+                    # Check how many have schemas (including empty properties - valid for zero-param functions)
+                    # A valid schema has type='object' - empty properties is valid for zero-parameter functions
+                    schemas_count = sum(1 for t in tools if t.get('inputSchema', {}).get('type') == 'object')
+                    tools_with_params = sum(1 for t in tools if t.get('inputSchema', {}).get('properties', {}))
+                    print(f"TOOL_REGISTRY: {schemas_count}/{len(tools)} tools have schemas ({tools_with_params} with parameters, {schemas_count - tools_with_params} zero-param functions)", flush=True)
                     sys.stdout.flush()
                 
                 # Final fallback: if still empty, return known tools with empty schemas
