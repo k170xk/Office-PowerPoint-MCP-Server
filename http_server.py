@@ -517,16 +517,69 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                 
                 # Use TOOL_REGISTRY (like Word MCP) - simple and reliable
                 if tool_name not in TOOL_REGISTRY:
-                    return {
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "error": {
-                            "code": -32601,
-                            "message": f"Tool not found: {tool_name}"
-                        }
-                    }
-                
-                tool_func = TOOL_REGISTRY[tool_name]
+                    # Try to rebuild TOOL_REGISTRY in case it's empty
+                    if len(TOOL_REGISTRY) == 0:
+                        print(f"Warning: TOOL_REGISTRY is empty, rebuilding...", flush=True)
+                        build_tool_registry()
+                    
+                    # If still not found, try to get from app directly
+                    if tool_name not in TOOL_REGISTRY:
+                        tools_dict = getattr(app, '_tools', None) or getattr(app, 'tools', None)
+                        if tools_dict and tool_name in tools_dict:
+                            tool_info = tools_dict[tool_name]
+                            if isinstance(tool_info, dict):
+                                tool_func = (tool_info.get('handler') or 
+                                            tool_info.get('function') or 
+                                            tool_info.get('func') or
+                                            tool_info.get('_func'))
+                            elif callable(tool_info):
+                                tool_func = tool_info
+                            else:
+                                tool_func = None
+                            
+                            if tool_func:
+                                # Unwrap function
+                                original_func = tool_func
+                                for _ in range(10):
+                                    if hasattr(tool_func, '__wrapped__'):
+                                        tool_func = tool_func.__wrapped__
+                                    elif hasattr(tool_func, '_func'):
+                                        tool_func = tool_func._func
+                                    elif hasattr(tool_func, 'func'):
+                                        tool_func = tool_func.func
+                                    elif hasattr(tool_func, '__func__'):
+                                        tool_func = tool_func.__func__
+                                    else:
+                                        break
+                                
+                                if not callable(tool_func):
+                                    tool_func = original_func
+                                
+                                # Add to registry for next time
+                                TOOL_REGISTRY[tool_name] = tool_func
+                                print(f"Added {tool_name} to TOOL_REGISTRY dynamically", flush=True)
+                            else:
+                                return {
+                                    "jsonrpc": "2.0",
+                                    "id": request_id,
+                                    "error": {
+                                        "code": -32601,
+                                        "message": f"Tool not found: {tool_name}"
+                                    }
+                                }
+                        else:
+                            return {
+                                "jsonrpc": "2.0",
+                                "id": request_id,
+                                "error": {
+                                    "code": -32601,
+                                    "message": f"Tool not found: {tool_name}"
+                                }
+                            }
+                    else:
+                        tool_func = TOOL_REGISTRY[tool_name]
+                else:
+                    tool_func = TOOL_REGISTRY[tool_name]
                 
                 # Handle file_path parameters - use storage adapter
                 manager = get_presentation_manager()
