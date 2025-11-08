@@ -320,12 +320,76 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                 except Exception as e:
                     print(f"FastMCP list_tools failed: {e}")
                 
-                # Fallback: Use TOOL_REGISTRY (like Word MCP)
+                # Fallback: Use TOOL_REGISTRY with AST parsing for nested functions
                 if not tools or not any(t.get('inputSchema', {}).get('properties') for t in tools):
-                    print("Using TOOL_REGISTRY for schema extraction...")
+                    print("Using TOOL_REGISTRY with AST parsing for schema extraction...")
                     tools = []
+                    # Map tool names to their source modules
+                    from tools import presentation_tools, content_tools, structural_tools, professional_tools
+                    from tools import template_tools, hyperlink_tools, chart_tools, connector_tools
+                    from tools import master_tools, transition_tools
+                    
+                    tool_modules_map = {
+                        'create_presentation': presentation_tools,
+                        'create_presentation_from_template': presentation_tools,
+                        'open_presentation': presentation_tools,
+                        'save_presentation': presentation_tools,
+                        'get_presentation_info': presentation_tools,
+                        'get_template_file_info': presentation_tools,
+                        'set_core_properties': presentation_tools,
+                        'add_slide': content_tools,
+                        'get_slide_info': content_tools,
+                        'extract_slide_text': content_tools,
+                        'extract_presentation_text': content_tools,
+                        'populate_placeholder': content_tools,
+                        'add_bullet_points': content_tools,
+                        'manage_text': content_tools,
+                        'manage_image': content_tools,
+                        'add_table': structural_tools,
+                        'format_table_cell': structural_tools,
+                        'add_shape': structural_tools,
+                        'add_chart': structural_tools,
+                        'update_chart_data': chart_tools,
+                        'apply_professional_design': professional_tools,
+                        'apply_picture_effects': professional_tools,
+                        'manage_fonts': professional_tools,
+                        'list_slide_templates': template_tools,
+                        'apply_slide_template': template_tools,
+                        'create_slide_from_template': template_tools,
+                        'create_presentation_from_templates': template_tools,
+                        'get_template_info': template_tools,
+                        'auto_generate_presentation': template_tools,
+                        'optimize_slide_text': template_tools,
+                        'manage_hyperlinks': hyperlink_tools,
+                        'add_connector': connector_tools,
+                        'manage_slide_masters': master_tools,
+                        'manage_slide_transitions': transition_tools,
+                        'list_presentations': ppt_mcp_server,
+                        'list_available_presentations': ppt_mcp_server,
+                        'switch_presentation': ppt_mcp_server,
+                        'get_server_info': ppt_mcp_server,
+                    }
+                    
                     for tool_name, tool_func in TOOL_REGISTRY.items():
-                        schema = self._get_tool_schema(tool_func)
+                        schema = None
+                        # Try AST parsing first (works for nested functions)
+                        if tool_name in tool_modules_map:
+                            module = tool_modules_map[tool_name]
+                            try:
+                                schema = self._get_tool_schema_from_source(module, tool_name, tool_func)
+                                if schema.get('properties'):
+                                    print(f"  ✓ Extracted schema for {tool_name} from source ({len(schema.get('properties', {}))} params)")
+                            except Exception as e:
+                                print(f"  AST parsing failed for {tool_name}: {e}")
+                        
+                        # Fallback to signature extraction
+                        if not schema or not schema.get('properties'):
+                            try:
+                                schema = self._get_tool_schema(tool_func)
+                            except Exception as e:
+                                print(f"  Signature extraction failed for {tool_name}: {e}")
+                                schema = {"type": "object", "properties": {}}
+                        
                         tools.append({
                             "name": tool_name,
                             "description": tool_func.__doc__ or f"Tool: {tool_name}",
