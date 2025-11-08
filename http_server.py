@@ -337,34 +337,39 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                                 if tool_name in tool_modules:
                                     module, func_name = tool_modules[tool_name]
                                     try:
+                                        # Try to get function, but it might be None if nested
                                         tool_func = getattr(module, func_name, None)
-                                        if tool_func and callable(tool_func):
-                                            try:
-                                                # Try to extract schema from function
-                                                schema = self._get_tool_schema_from_source(module, func_name, tool_func)
-                                                
-                                                # If that failed, try direct signature extraction
-                                                if not schema.get('properties'):
-                                                    schema = self._get_tool_schema(tool_func)
-                                                
-                                                # If still empty, log it
-                                                if not schema.get('properties'):
-                                                    print(f"Warning: Could not extract schema for {tool_name}")
-                                            except Exception as schema_error:
-                                                print(f"Error extracting schema for {tool_name}: {schema_error}")
-                                                import traceback
-                                                traceback.print_exc()
-                                                schema = {"type": "object", "properties": {}}
+                                        
+                                        # Always try to extract schema from source file (works even if function is nested)
+                                        try:
+                                            schema = self._get_tool_schema_from_source(module, func_name, tool_func)
                                             
-                                            desc = getattr(tool_func, '__doc__', None) or f"Tool: {tool_name}"
-                                            tools.append({
-                                                "name": tool_name,
-                                                "description": desc.strip() if desc else f"Tool: {tool_name}",
-                                                "inputSchema": schema
-                                            })
-                                            continue
+                                            # If that failed and we have a function, try direct signature extraction
+                                            if not schema.get('properties') and tool_func and callable(tool_func):
+                                                schema = self._get_tool_schema(tool_func)
+                                            
+                                            # If still empty, log it
+                                            if not schema.get('properties'):
+                                                print(f"Warning: Could not extract schema for {tool_name} from {inspect.getfile(module)}")
+                                        except Exception as schema_error:
+                                            print(f"Error extracting schema for {tool_name}: {schema_error}")
+                                            import traceback
+                                            traceback.print_exc()
+                                            schema = {"type": "object", "properties": {}}
+                                        
+                                        # Get description from function or use default
+                                        desc = f"Tool: {tool_name}"
+                                        if tool_func and callable(tool_func):
+                                            desc = getattr(tool_func, '__doc__', None) or desc
+                                        
+                                        tools.append({
+                                            "name": tool_name,
+                                            "description": desc.strip() if desc else f"Tool: {tool_name}",
+                                            "inputSchema": schema
+                                        })
+                                        continue
                                     except Exception as e:
-                                        print(f"Error extracting schema for {tool_name}: {e}")
+                                        print(f"Error processing tool {tool_name}: {e}")
                                         import traceback
                                         traceback.print_exc()
                                 
