@@ -100,7 +100,7 @@ def resolve_tool_function(tool_name):
                 tool_info = value[tool_name]
                 print(f"DEBUG resolve: app.{attr}[{tool_name}] type={type(tool_info)}", flush=True)
                 if isinstance(tool_info, dict):
-                    for key in ['handler', 'function', 'func', '_func', 'callable']:
+                    for key in ['fn', 'handler', 'function', 'func', '_func', 'callable']:
                         if key in tool_info and callable(tool_info[key]):
                             func = _unwrap_callable(tool_info[key])
                             if callable(func):
@@ -118,7 +118,7 @@ def resolve_tool_function(tool_name):
                     possible = []
                     attr_list = [k for k in dir(tool_info) if not k.startswith('__')]
                     print(f"DEBUG resolve: tool_info({tool_name}) type={type(tool_info)} attrs={attr_list}", flush=True)
-                    for key in ['handler', 'function', 'func', '_func', 'callable', '__call__']:
+                    for key in ['fn', 'handler', 'function', 'func', '_func', 'callable', '__call__']:
                         candidate = getattr(tool_info, key, None)
                         if candidate:
                             possible.append((key, candidate))
