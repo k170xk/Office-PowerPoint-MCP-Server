@@ -147,9 +147,16 @@ class StorageAdapter:
         
         elif self.storage_type == 'disk':
             dest_path = os.path.join(self.disk_path, filename)
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+            # Copy file to disk
             shutil.copy2(local_path, dest_path)
+            print(f"Saved presentation to Render Disk: {dest_path}")
+            # Always return URL if base_url is set, otherwise return path
             if self.base_url:
-                return f"{self.base_url}/presentations/{filename}"
+                url = f"{self.base_url}/presentations/{filename}"
+                print(f"Presentation URL: {url}")
+                return url
             return dest_path
         
         else:  # local

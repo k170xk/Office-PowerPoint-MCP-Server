@@ -30,6 +30,15 @@ _presentation_files = {}  # Maps presentation_id to filename
 PRESENTATIONS_DIR = os.getenv('PRESENTATIONS_DIR', './presentations')
 BASE_URL = os.getenv('BASE_URL', '')  # Will be set from Render service URL
 
+# Ensure BASE_URL is set for download URLs
+if not BASE_URL:
+    render_service_url = os.getenv('RENDER_SERVICE_URL')
+    if render_service_url:
+        BASE_URL = render_service_url
+    else:
+        # Default to the known service URL
+        BASE_URL = 'https://office-powerpoint-mcp.onrender.com'
+
 # Ensure presentations directory exists
 os.makedirs(PRESENTATIONS_DIR, exist_ok=True)
 
@@ -533,9 +542,31 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                             filename_base = f"{filename_base}.pptx"
                         
                         if filename_base:
+                            # Save to storage (this saves to Render Disk)
                             pres_url = manager.save_presentation(local_path, filename_base)
-                            if isinstance(result, dict) and 'presentation_id' in result:
-                                _presentation_files[result['presentation_id']] = filename_base
+                            # Generate download URL
+                            download_url = f"{BASE_URL or 'https://office-powerpoint-mcp.onrender.com'}/presentations/{filename_base}"
+                            
+                            # Verify file was saved
+                            storage = get_storage_adapter()
+                            if storage.presentation_exists(filename_base):
+                                print(f"✓ Verified: Presentation {filename_base} exists in storage")
+                            else:
+                                print(f"⚠ Warning: Presentation {filename_base} not found in storage after save")
+                            
+                            # Enhance result with download URL
+                            if isinstance(result, dict):
+                                result['download_url'] = download_url
+                                result['filename'] = filename_base
+                                result['saved_to_disk'] = True
+                                if 'presentation_id' in result:
+                                    _presentation_files[result['presentation_id']] = filename_base
+                                if 'message' in result:
+                                    result['message'] = f"{result['message']}\n\n✓ Saved to Render Disk: {filename_base}\n📥 Download URL: {download_url}"
+                                else:
+                                    result['message'] = f"✓ Saved to Render Disk: {filename_base}\n📥 Download URL: {download_url}"
+                            elif isinstance(result, str):
+                                result = f"{result}\n\n✓ Saved to Render Disk: {filename_base}\n📥 Download URL: {download_url}"
                     
                     # Auto-save after modifications
                     modification_tools = [
@@ -560,7 +591,26 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                                     from utils import presentation_utils as ppt_utils
                                     ppt_utils.save_presentation(presentations[pres_id], temp_path)
                                     if os.path.exists(temp_path):
-                                        manager.save_presentation(temp_path, auto_save_filename)
+                                        # Save to storage and get URL (saves to Render Disk)
+                                        pres_url = manager.save_presentation(temp_path, auto_save_filename)
+                                        download_url = f"{BASE_URL or 'https://office-powerpoint-mcp.onrender.com'}/presentations/{auto_save_filename}"
+                                        
+                                        # Verify file was saved
+                                        storage = get_storage_adapter()
+                                        if storage.presentation_exists(auto_save_filename):
+                                            print(f"✓ Verified: Auto-saved presentation {auto_save_filename} exists in storage")
+                                        
+                                        # Enhance result with download URL
+                                        if isinstance(result, dict):
+                                            if 'download_url' not in result:
+                                                result['download_url'] = download_url
+                                            result['filename'] = auto_save_filename
+                                            result['auto_saved'] = True
+                                            if 'message' in result:
+                                                result['message'] = f"{result['message']}\n\n✓ Auto-saved to Render Disk: {auto_save_filename}\n📥 Download URL: {download_url}"
+                                            else:
+                                                result['message'] = f"✓ Auto-saved to Render Disk: {auto_save_filename}\n📥 Download URL: {download_url}"
+                                        
                                         os.unlink(temp_path)
                                 except Exception as e:
                                     print(f"Warning: Auto-save failed: {e}")
