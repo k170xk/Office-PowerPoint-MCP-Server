@@ -405,7 +405,7 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                     print("Extracting schemas from source files for all tools...")
                     # Try to get tool functions from the registered modules
                     try:
-                            # Import tool modules to access functions
+                        # Import tool modules to access functions
                             from tools import presentation_tools, content_tools, structural_tools, professional_tools
                             from tools import template_tools, hyperlink_tools, chart_tools, connector_tools
                             from tools import master_tools, transition_tools
@@ -454,6 +454,9 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                             tool_modules['switch_presentation'] = (ppt_mcp_server, 'switch_presentation')
                             tool_modules['get_server_info'] = (ppt_mcp_server, 'get_server_info')
                             
+                            # Build existing tools dict for updating schemas
+                            existing_tools_dict = {t.get('name'): t for t in tools}
+                            
                             for tool_name in known_tools:
                                 if tool_name in tool_modules:
                                     module, func_name = tool_modules[tool_name]
@@ -462,8 +465,10 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                                         schema = None
                                         try:
                                             schema = self._get_tool_schema_from_source(module, func_name, None)
+                                            if schema.get('properties'):
+                                                print(f"  ✓ Extracted schema for {tool_name} from source ({len(schema.get('properties', {}))} params)")
                                         except Exception as e:
-                                            print(f"Source parsing failed for {tool_name}: {e}")
+                                            print(f"  Source parsing failed for {tool_name}: {e}")
                                         
                                         # If that failed, try to get function and extract from it
                                         if not schema or not schema.get('properties'):
@@ -476,32 +481,28 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                                         
                                         # If still empty, use empty schema but log it
                                         if not schema or not schema.get('properties'):
-                                            print(f"Warning: Could not extract schema for {tool_name} from {inspect.getfile(module) if hasattr(module, '__file__') else 'unknown'}")
+                                            print(f"  Warning: Could not extract schema for {tool_name}")
                                             schema = {"type": "object", "properties": {}}
                                         
-                                        # Get description - try from FastMCP tools dict first
+                                        # Get description
                                         desc = f"Tool: {tool_name}"
-                                        # Try to get from FastMCP's tools dict
-                                        if hasattr(app, '_tools') or hasattr(app, 'tools'):
-                                            tools_dict = getattr(app, '_tools', None) or getattr(app, 'tools', None)
-                                            if tools_dict and tool_name in tools_dict:
-                                                tool_info = tools_dict[tool_name]
-                                                if isinstance(tool_info, dict):
-                                                    desc = tool_info.get('description', desc)
-                                                elif callable(tool_info):
-                                                    desc = getattr(tool_info, '__doc__', None) or desc
+                                        tool_func = getattr(module, func_name, None)
+                                        if tool_func and callable(tool_func):
+                                            desc = getattr(tool_func, '__doc__', None) or desc
                                         
-                                        # Fallback to getting from module function
-                                        if desc == f"Tool: {tool_name}":
-                                            tool_func = getattr(module, func_name, None)
-                                            if tool_func and callable(tool_func):
-                                                desc = getattr(tool_func, '__doc__', None) or desc
-                                        
-                                        tools.append({
-                                            "name": tool_name,
-                                            "description": desc.strip() if desc else f"Tool: {tool_name}",
-                                            "inputSchema": schema
-                                        })
+                                        # Update existing tool or add new one
+                                        if tool_name in existing_tools_dict:
+                                            # Update existing tool's schema if we got one
+                                            if schema.get('properties'):
+                                                existing_tools_dict[tool_name]['inputSchema'] = schema
+                                                print(f"  ✓ Updated schema for {tool_name} ({len(schema.get('properties', {}))} params)")
+                                        else:
+                                            # Add new tool
+                                            tools.append({
+                                                "name": tool_name,
+                                                "description": desc.strip() if desc else f"Tool: {tool_name}",
+                                                "inputSchema": schema
+                                            })
                                         continue
                                     except Exception as e:
                                         print(f"Error processing tool {tool_name}: {e}")
