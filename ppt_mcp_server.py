@@ -344,6 +344,57 @@ def list_presentations() -> Dict:
     }
 
 @app.tool()
+def list_available_presentations(directory: Optional[str] = None) -> Dict:
+    """List all .pptx files available in storage."""
+    import os
+    from storage_adapter import get_storage_adapter
+    
+    storage = get_storage_adapter()
+    files = []
+    
+    try:
+        if storage.storage_type == 'disk':
+            search_dir = directory or storage.disk_path
+            if os.path.exists(search_dir):
+                for filename in os.listdir(search_dir):
+                    if filename.endswith('.pptx'):
+                        file_path = os.path.join(search_dir, filename)
+                        file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+                        files.append({
+                            "filename": filename,
+                            "size_bytes": file_size,
+                            "path": file_path
+                        })
+        elif storage.storage_type == 'local':
+            search_dir = directory or storage.local_path
+            if os.path.exists(search_dir):
+                for filename in os.listdir(search_dir):
+                    if filename.endswith('.pptx'):
+                        file_path = os.path.join(search_dir, filename)
+                        file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+                        files.append({
+                            "filename": filename,
+                            "size_bytes": file_size,
+                            "path": file_path
+                        })
+        elif storage.storage_type == 's3':
+            # For S3, we'd need to list objects - simplified for now
+            return {
+                "error": "S3 storage listing not yet implemented",
+                "storage_type": "s3"
+            }
+    except Exception as e:
+        return {
+            "error": f"Failed to list presentations: {str(e)}"
+        }
+    
+    return {
+        "presentations": sorted(files, key=lambda x: x['filename']),
+        "total_count": len(files),
+        "storage_type": storage.storage_type
+    }
+
+@app.tool()
 def switch_presentation(presentation_id: str) -> Dict:
     """Switch to a different loaded presentation."""
     if presentation_id not in presentations:

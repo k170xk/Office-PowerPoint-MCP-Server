@@ -504,8 +504,21 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                     # Track presentation_id to filename mapping
                     if isinstance(result, dict):
                         pres_id = result.get('presentation_id')
-                        if pres_id and filename_base:
-                            _presentation_files[pres_id] = filename_base
+                        if pres_id:
+                            # For open_presentation, create_presentation_from_template, save_presentation
+                            if filename_base:
+                                _presentation_files[pres_id] = filename_base
+                            # For create_presentation, if file_path was provided, use it
+                            elif 'file_path' in arguments and arguments['file_path']:
+                                # Extract filename from the file_path that was used
+                                used_path = arguments['file_path']
+                                if os.path.exists(used_path):
+                                    # This is a local path, get the original filename
+                                    if original_file_path:
+                                        _presentation_files[pres_id] = os.path.basename(original_file_path)
+                                    else:
+                                        # Try to infer from local_path
+                                        _presentation_files[pres_id] = os.path.basename(used_path)
                     
                     # Handle save_presentation - upload to storage
                     if tool_name == 'save_presentation' and local_path and os.path.exists(local_path):
@@ -612,8 +625,18 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                         # Track presentation_id to filename mapping for auto-save
                         if isinstance(result, dict):
                             pres_id = result.get('presentation_id')
-                            if pres_id and filename_base:
-                                _presentation_files[pres_id] = filename_base
+                            if pres_id:
+                                # For open_presentation, create_presentation_from_template, save_presentation
+                                if filename_base:
+                                    _presentation_files[pres_id] = filename_base
+                                # For create_presentation, if file_path was provided, use it
+                                elif 'file_path' in arguments and arguments['file_path']:
+                                    used_path = arguments['file_path']
+                                    if os.path.exists(used_path):
+                                        if original_file_path:
+                                            _presentation_files[pres_id] = os.path.basename(original_file_path)
+                                        else:
+                                            _presentation_files[pres_id] = os.path.basename(used_path)
                         
                         # Handle save_presentation - upload to storage
                         if tool_name == 'save_presentation' and local_path and os.path.exists(local_path):
