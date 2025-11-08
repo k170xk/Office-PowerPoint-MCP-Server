@@ -857,17 +857,63 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             tree = ast.parse(source_code)
             
             # Find the function definition (could be nested inside register function)
-            def find_function(node, target_name):
-                """Recursively find function definition."""
-                if isinstance(node, ast.FunctionDef) and node.name == target_name:
-                    return node
-                for child in ast.iter_child_nodes(node):
-                    result = find_function(child, target_name)
-                    if result:
-                        return result
-                return None
+            # Try multiple strategies to find the function
+            func_node = None
             
-            func_node = find_function(tree, func_name)
+            # Strategy 1: Direct search by name
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef) and node.name == func_name:
+                    func_node = node
+                    break
+            
+            # Strategy 2: If not found, search in nested functions (closures)
+            if not func_node:
+                def find_function_recursive(node, target_name, depth=0):
+                    """Recursively find function definition, even in nested closures."""
+                    if isinstance(node, ast.FunctionDef):
+                        if node.name == target_name:
+                            return node
+                        # Search inside this function's body
+                        for child in node.body:
+                            result = find_function_recursive(child, target_name, depth + 1)
+                            if result:
+                                return result
+                    elif isinstance(node, (ast.AsyncFunctionDef, ast.Lambda)):
+                        # Also check async functions and lambdas
+                        if hasattr(node, 'name') and node.name == target_name:
+                            return node
+                    else:
+                        # Search in all child nodes
+                        for child in ast.iter_child_nodes(node):
+                            result = find_function_recursive(child, target_name, depth + 1)
+                            if result:
+                                return result
+                    return None
+                
+                func_node = find_function_recursive(tree, func_name)
+            
+            # Strategy 3: If still not found, try to match by docstring or other attributes
+            if not func_node and tool_func:
+                # Try to find by matching docstring
+                try:
+                    expected_doc = tool_func.__doc__ or ""
+                    for node in ast.walk(tree):
+                        if isinstance(node, ast.FunctionDef) and node.name == func_name:
+                            # Check if docstring matches
+                            if node.body:
+                                first_stmt = node.body[0]
+                                if isinstance(first_stmt, ast.Expr):
+                                    if isinstance(first_stmt.value, ast.Str):
+                                        docstring = first_stmt.value.s
+                                    elif isinstance(first_stmt.value, ast.Constant) and isinstance(first_stmt.value.value, str):
+                                        docstring = first_stmt.value.value
+                                    else:
+                                        docstring = ""
+                                    if expected_doc and docstring and expected_doc.strip() in docstring:
+                                        func_node = node
+                                        break
+                except:
+                    pass
             if func_node:
                 print(f"✓ Found function {func_name} in AST of {source_file}")
                 # Found the function - extract parameters
