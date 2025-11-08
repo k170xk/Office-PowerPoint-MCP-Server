@@ -598,6 +598,54 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                 tool_name = params.get('name')
                 arguments = params.get('arguments', {})
                 
+                # Try FastMCP's built-in request handler first (if available)
+                # This is the most reliable way since FastMCP knows how to call its own tools
+                try:
+                    # FastMCP might have a handle_request or similar method
+                    if hasattr(app, 'handle_request') or hasattr(app, '_handle_request'):
+                        handler = getattr(app, 'handle_request', None) or getattr(app, '_handle_request', None)
+                        if handler:
+                            # Create a proper MCP request
+                            mcp_request = {
+                                "jsonrpc": "2.0",
+                                "id": request_id,
+                                "method": "tools/call",
+                                "params": {
+                                    "name": tool_name,
+                                    "arguments": arguments
+                                }
+                            }
+                            
+                            # Try to call it (might be async)
+                            import asyncio
+                            try:
+                                if asyncio.iscoroutinefunction(handler):
+                                    # Need to run in async context
+                                    loop = asyncio.get_event_loop()
+                                    if loop.is_running():
+                                        # Can't await in sync context, skip this
+                                        pass
+                                    else:
+                                        result = loop.run_until_complete(handler(mcp_request))
+                                        if result and 'result' in result:
+                                            return {
+                                                "jsonrpc": "2.0",
+                                                "id": request_id,
+                                                "result": result['result']
+                                            }
+                                else:
+                                    result = handler(mcp_request)
+                                    if result and 'result' in result:
+                                        return {
+                                            "jsonrpc": "2.0",
+                                            "id": request_id,
+                                            "result": result['result']
+                                        }
+                            except Exception as e:
+                                print(f"DEBUG: FastMCP handle_request failed: {e}", flush=True)
+                except Exception as e:
+                    print(f"DEBUG: Error trying FastMCP handle_request: {e}", flush=True)
+                
                 # Use TOOL_REGISTRY (like Word MCP) - simple and reliable
                 tool_func = None
                 
