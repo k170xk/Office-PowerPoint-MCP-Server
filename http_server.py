@@ -160,8 +160,8 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                     "list_slide_templates", "apply_slide_template", "create_slide_from_template",
                     "create_presentation_from_templates", "get_template_info", "auto_generate_presentation",
                     "optimize_slide_text", "manage_hyperlinks", "add_connector",
-                    "manage_slide_masters", "manage_slide_transitions",
-                    "list_presentations", "switch_presentation", "get_server_info"
+                            "manage_slide_masters", "manage_slide_transitions",
+                            "list_presentations", "list_available_presentations", "switch_presentation", "get_server_info"
                 ]
                 
                 # FastMCP stores tools internally - try multiple ways to access them
