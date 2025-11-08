@@ -977,6 +977,7 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             # Get the source file path
             source_file = inspect.getfile(module)
             if not os.path.exists(source_file):
+                print(f"Warning: Source file not found: {source_file}")
                 return {"type": "object", "properties": {}}
             
             # Read and parse the source file
@@ -999,6 +1000,7 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             
             func_node = find_function(tree, func_name)
             if func_node:
+                print(f"✓ Found function {func_name} in AST")
                 # Found the function - extract parameters
                 properties = {}
                 required = []
@@ -1112,10 +1114,13 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                 return schema
             
             # Function not found in AST
+            print(f"Warning: Function {func_name} not found in AST of {source_file}")
             return {"type": "object", "properties": {}}
             
         except Exception as e:
-            print(f"Error extracting schema from source for {func_name}: {e}")
+            print(f"Error extracting schema from source for {func_name} in {inspect.getfile(module) if hasattr(module, '__file__') else 'unknown'}: {e}")
+            import traceback
+            traceback.print_exc()
             return {"type": "object", "properties": {}}
     
     def _get_tool_schema(self, tool_func):
