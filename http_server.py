@@ -35,16 +35,46 @@ def build_tool_registry():
     """Build a registry of all available tools by extracting unwrapped functions from FastMCP."""
     global TOOL_REGISTRY
     
-    # Access FastMCP's tools dict
+    # Debug: Check what attributes app has
+    print(f"DEBUG: app type: {type(app)}")
+    print(f"DEBUG: app attributes with 'tool': {[attr for attr in dir(app) if 'tool' in attr.lower()]}")
+    
+    # Access FastMCP's tools dict - try multiple ways
     tools_dict = None
     if hasattr(app, '_tools'):
         tools_dict = app._tools
+        print(f"DEBUG: Found app._tools with {len(tools_dict) if tools_dict else 0} items")
     elif hasattr(app, 'tools'):
         tools_dict = app.tools
+        print(f"DEBUG: Found app.tools with {len(tools_dict) if tools_dict else 0} items")
+    elif hasattr(app, '_tool_registry'):
+        tools_dict = app._tool_registry
+        print(f"DEBUG: Found app._tool_registry with {len(tools_dict) if tools_dict else 0} items")
+    else:
+        # Try to find tools in app.__dict__
+        app_dict = vars(app) if hasattr(app, '__dict__') else {}
+        for key, value in app_dict.items():
+            if 'tool' in key.lower() and isinstance(value, dict):
+                tools_dict = value
+                print(f"DEBUG: Found tools in app.{key} with {len(tools_dict)} items")
+                break
     
     if not tools_dict or len(tools_dict) == 0:
         print("Warning: FastMCP tools dict not found or empty")
+        # Try to inspect app structure
+        if hasattr(app, '__dict__'):
+            print(f"DEBUG: app.__dict__ keys: {list(app.__dict__.keys())[:20]}")
         return
+    
+    # Debug: Check structure of first tool
+    if tools_dict:
+        first_tool_name = list(tools_dict.keys())[0]
+        first_tool_info = tools_dict[first_tool_name]
+        print(f"DEBUG: First tool '{first_tool_name}' type: {type(first_tool_info)}")
+        if isinstance(first_tool_info, dict):
+            print(f"DEBUG: First tool dict keys: {list(first_tool_info.keys())}")
+        elif callable(first_tool_info):
+            print(f"DEBUG: First tool is callable, attributes: {[attr for attr in dir(first_tool_info) if not attr.startswith('__')][:10]}")
     
     # Extract unwrapped function objects
     tools_map = {}
@@ -86,6 +116,15 @@ def build_tool_registry():
             # If we couldn't unwrap, use the original
             if not callable(tool_func):
                 tool_func = original_func
+            
+            # Test if we can get signature
+            try:
+                import inspect
+                sig = inspect.signature(tool_func)
+                params = list(sig.parameters.keys())
+                print(f"DEBUG: Tool '{tool_name}' has {len(params)} parameters: {params[:5]}")
+            except Exception as e:
+                print(f"DEBUG: Tool '{tool_name}' signature extraction failed: {e}")
             
             tools_map[tool_name] = tool_func
     
