@@ -3,6 +3,7 @@ Presentation management utilities for PowerPoint MCP Server.
 Functions for creating, opening, saving, and managing presentations.
 """
 from pptx import Presentation
+from pptx.util import Inches
 from typing import Dict, List, Optional
 import os
 
@@ -14,7 +15,13 @@ def create_presentation() -> Presentation:
     Returns:
         A new Presentation object
     """
-    return Presentation()
+    presentation = Presentation()
+    
+    # Ensure 16:9 widescreen aspect ratio (13.333" x 7.5")
+    presentation.slide_width = Inches(13.333)
+    presentation.slide_height = Inches(7.5)
+    
+    return presentation
 
 
 def open_presentation(file_path: str) -> Presentation:
@@ -53,6 +60,19 @@ def create_presentation_from_template(template_path: str) -> Presentation:
     try:
         # Load the template file as a presentation
         presentation = Presentation(template_path)
+        
+        # Normalize to 16:9 widescreen if template uses legacy 4:3 sizing
+        try:
+            width = presentation.slide_width
+            height = presentation.slide_height
+            # PowerPoint defaults: 10" x 7.5" (4:3), widescreen: 13.333" x 7.5"
+            if height and width and float(width) / float(height) < 1.6:
+                presentation.slide_width = Inches(13.333)
+                presentation.slide_height = Inches(7.5)
+        except Exception:
+            # If sizing update fails, continue with template dimensions
+            pass
+        
         return presentation
     except Exception as e:
         raise Exception(f"Failed to load template file '{template_path}': {str(e)}")
