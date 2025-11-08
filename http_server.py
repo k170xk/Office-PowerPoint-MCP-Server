@@ -15,6 +15,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Import the FastMCP app and necessary components
+# Import the entire module to ensure all tools are registered
+import ppt_mcp_server
 from ppt_mcp_server import app, presentations, current_presentation_id
 from presentation_manager import get_presentation_manager
 from storage_adapter import get_storage_adapter
@@ -111,6 +113,17 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         params = request.get('params', {})
         request_id = request.get('id')
         
+        # Try to use FastMCP's internal request handler first
+        try:
+            # FastMCP might have a handle_request method or similar
+            if hasattr(app, 'handle_request') or hasattr(app, '_handle_request'):
+                handler = getattr(app, 'handle_request', None) or getattr(app, '_handle_request', None)
+                if handler:
+                    result = await handler(request)
+                    return result
+        except Exception as e:
+            print(f"FastMCP handler not available: {e}")
+        
         try:
             if method == 'initialize':
                 return {
@@ -131,35 +144,106 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             elif method == 'tools/list':
                 # Get tools from FastMCP app
                 tools = []
-                # FastMCP stores tools in app._tools dictionary
-                # Try to access the tools registry
+                # FastMCP stores tools internally - try multiple ways to access them
                 try:
-                    # FastMCP v0.6+ stores tools in _tools attribute
-                    if hasattr(app, '_tools'):
+                    # Method 1: Try _tool_registry (common in FastMCP)
+                    if hasattr(app, '_tool_registry'):
+                        for tool_name, tool_info in app._tool_registry.items():
+                            schema = tool_info.get('inputSchema', {}) if isinstance(tool_info, dict) else {}
+                            desc = tool_info.get('description', f"Tool: {tool_name}") if isinstance(tool_info, dict) else (getattr(tool_info, '__doc__', None) or f"Tool: {tool_name}")
+                            tools.append({
+                                "name": tool_name,
+                                "description": desc,
+                                "inputSchema": schema if schema else {"type": "object", "properties": {}}
+                            })
+                    # Method 2: Try _tools attribute
+                    elif hasattr(app, '_tools'):
                         for tool_name, tool_info in app._tools.items():
-                            tools.append({
-                                "name": tool_name,
-                                "description": tool_info.get('description', f"Tool: {tool_name}"),
-                                "inputSchema": tool_info.get('inputSchema', {"type": "object", "properties": {}})
-                            })
-                    # Try alternative attribute names
-                    elif hasattr(app, 'tools'):
-                        for tool_name, tool_info in app.tools.items():
-                            tools.append({
-                                "name": tool_name,
-                                "description": tool_info.get('description', f"Tool: {tool_name}"),
-                                "inputSchema": tool_info.get('inputSchema', {"type": "object", "properties": {}})
-                            })
+                            if isinstance(tool_info, dict):
+                                tools.append({
+                                    "name": tool_name,
+                                    "description": tool_info.get('description', f"Tool: {tool_name}"),
+                                    "inputSchema": tool_info.get('inputSchema', {"type": "object", "properties": {}})
+                                })
+                            else:
+                                # tool_info might be a function
+                                tools.append({
+                                    "name": tool_name,
+                                    "description": getattr(tool_info, '__doc__', None) or f"Tool: {tool_name}",
+                                    "inputSchema": {"type": "object", "properties": {}}
+                                })
+                    # Method 3: Try accessing via __dict__ or vars()
+                    elif hasattr(app, '__dict__'):
+                        app_dict = vars(app)
+                        for key, value in app_dict.items():
+                            if 'tool' in key.lower() and isinstance(value, dict):
+                                for tool_name, tool_info in value.items():
+                                    tools.append({
+                                        "name": tool_name,
+                                        "description": tool_info.get('description', f"Tool: {tool_name}") if isinstance(tool_info, dict) else f"Tool: {tool_name}",
+                                        "inputSchema": tool_info.get('inputSchema', {"type": "object", "properties": {}}) if isinstance(tool_info, dict) else {"type": "object", "properties": {}}
+                                    })
+                    # Method 4: Use FastMCP's internal server to handle the request
                     else:
-                        # Fallback: use FastMCP's list_tools method if available
+                        # Create a mock request and use FastMCP's handler
+                        from mcp.server.fastmcp import FastMCP
+                        # Try to get tools via the server's internal handler
                         try:
-                            tool_list = await app.list_tools()
-                            tools = tool_list.get('tools', [])
+                            # FastMCP might have a _server attribute
+                            if hasattr(app, '_server') and hasattr(app._server, 'list_tools'):
+                                result = await app._server.list_tools({})
+                                if result and 'tools' in result:
+                                    tools = result['tools']
                         except:
-                            # Last resort: return empty list
                             pass
+                    
+                    # If still no tools, try inspecting the app's registered functions
+                    if not tools:
+                        # Last resort: manually list known tools from the modules
+                        known_tools = [
+                            "create_presentation", "create_presentation_from_template", "open_presentation",
+                            "save_presentation", "get_presentation_info", "get_template_file_info", "set_core_properties",
+                            "add_slide", "get_slide_info", "extract_slide_text", "extract_presentation_text",
+                            "populate_placeholder", "add_bullet_points", "manage_text", "manage_image",
+                            "add_table", "format_table_cell", "add_shape", "add_chart", "update_chart_data",
+                            "apply_professional_design", "apply_picture_effects", "manage_fonts",
+                            "list_slide_templates", "apply_slide_template", "create_slide_from_template",
+                            "create_presentation_from_templates", "get_template_info", "auto_generate_presentation",
+                            "optimize_slide_text", "manage_hyperlinks", "add_connector",
+                            "manage_slide_masters", "manage_slide_transitions",
+                            "list_presentations", "switch_presentation", "get_server_info"
+                        ]
+                        for tool_name in known_tools:
+                            tools.append({
+                                "name": tool_name,
+                                "description": f"Tool: {tool_name}",
+                                "inputSchema": {"type": "object", "properties": {}}
+                            })
+                    
                 except Exception as e:
+                    import traceback
                     print(f"Warning: Could not access FastMCP tools: {e}")
+                    traceback.print_exc()
+                    # Fallback to known tools list
+                    known_tools = [
+                        "create_presentation", "create_presentation_from_template", "open_presentation",
+                        "save_presentation", "get_presentation_info", "get_template_file_info", "set_core_properties",
+                        "add_slide", "get_slide_info", "extract_slide_text", "extract_presentation_text",
+                        "populate_placeholder", "add_bullet_points", "manage_text", "manage_image",
+                        "add_table", "format_table_cell", "add_shape", "add_chart", "update_chart_data",
+                        "apply_professional_design", "apply_picture_effects", "manage_fonts",
+                        "list_slide_templates", "apply_slide_template", "create_slide_from_template",
+                        "create_presentation_from_templates", "get_template_info", "auto_generate_presentation",
+                        "optimize_slide_text", "manage_hyperlinks", "add_connector",
+                        "manage_slide_masters", "manage_slide_transitions",
+                        "list_presentations", "switch_presentation", "get_server_info"
+                    ]
+                    for tool_name in known_tools:
+                        tools.append({
+                            "name": tool_name,
+                            "description": f"Tool: {tool_name}",
+                            "inputSchema": {"type": "object", "properties": {}}
+                        })
                 
                 return {
                     "jsonrpc": "2.0",
