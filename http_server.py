@@ -644,9 +644,9 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                                 # Add to registry for next time
                                 TOOL_REGISTRY[tool_name] = tool_func
                                 print(f"Added {tool_name} to TOOL_REGISTRY dynamically", flush=True)
-                    
-                    # Final fallback: Try FastMCP's call_tool method
-                    if not tool_func and hasattr(app, 'call_tool'):
+                
+                # Final fallback: Try FastMCP's call_tool method
+                if not tool_func and hasattr(app, 'call_tool'):
                         try:
                             # FastMCP might have a call_tool method
                             if asyncio.iscoroutinefunction(app.call_tool):
