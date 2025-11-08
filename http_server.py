@@ -122,23 +122,42 @@ def build_tool_registry():
     
     # Fallback: Access FastMCP's tools dict directly
     tools_dict = None
-    if hasattr(app, '_tools'):
-        tools_dict = app._tools
-        print(f"DEBUG: Found app._tools with {len(tools_dict) if tools_dict else 0} items")
-    elif hasattr(app, 'tools'):
-        tools_dict = app.tools
-        print(f"DEBUG: Found app.tools with {len(tools_dict) if tools_dict else 0} items")
-    elif hasattr(app, '_tool_registry'):
-        tools_dict = app._tool_registry
-        print(f"DEBUG: Found app._tool_registry with {len(tools_dict) if tools_dict else 0} items")
-    else:
-        # Try to find tools in app.__dict__
+    
+    # Try multiple ways to access FastMCP's tools
+    # FastMCP might store tools in different attributes
+    possible_attrs = ['_tools', 'tools', '_tool_registry', 'tool_registry', '_handlers', 'handlers']
+    
+    for attr in possible_attrs:
+        if hasattr(app, attr):
+            value = getattr(app, attr)
+            if isinstance(value, dict) and len(value) > 0:
+                tools_dict = value
+                print(f"DEBUG: Found app.{attr} with {len(tools_dict)} items")
+                break
+    
+    # If still not found, search app.__dict__
+    if not tools_dict:
         app_dict = vars(app) if hasattr(app, '__dict__') else {}
         for key, value in app_dict.items():
-            if 'tool' in key.lower() and isinstance(value, dict):
+            if 'tool' in key.lower() and isinstance(value, dict) and len(value) > 0:
                 tools_dict = value
                 print(f"DEBUG: Found tools in app.{key} with {len(tools_dict)} items")
                 break
+    
+    # Last resort: try to get from FastMCP's internal structure
+    if not tools_dict:
+        # FastMCP might use a different structure - try accessing via __dict__
+        if hasattr(app, '__dict__'):
+            for key, value in app.__dict__.items():
+                if isinstance(value, dict):
+                    # Check if it looks like a tools dict (has string keys)
+                    if len(value) > 0 and all(isinstance(k, str) for k in list(value.keys())[:5]):
+                        # Check if values look like tool handlers
+                        sample_value = list(value.values())[0]
+                        if callable(sample_value) or isinstance(sample_value, dict):
+                            tools_dict = value
+                            print(f"DEBUG: Found potential tools dict in app.{key} with {len(tools_dict)} items")
+                            break
     
     if not tools_dict or len(tools_dict) == 0:
         print("Warning: FastMCP tools dict not found or empty")
@@ -146,6 +165,8 @@ def build_tool_registry():
     
     # Extract unwrapped function objects
     tools_map = {}
+    print(f"DEBUG: Processing {len(tools_dict)} tools from dict")
+    
     for tool_name, tool_info in tools_dict.items():
         tool_func = None
         
@@ -155,7 +176,12 @@ def build_tool_registry():
             tool_func = (tool_info.get('handler') or 
                         tool_info.get('function') or 
                         tool_info.get('func') or
-                        tool_info.get('_func'))
+                        tool_info.get('_func') or
+                        tool_info.get('callable'))
+            
+            # If still not found, check if dict itself is callable (unlikely but possible)
+            if not tool_func and hasattr(tool_info, '__call__'):
+                tool_func = tool_info
         elif callable(tool_info):
             tool_func = tool_info
         
@@ -163,7 +189,7 @@ def build_tool_registry():
             # Unwrap if function is decorated (e.g., by FastMCP decorator)
             original_func = tool_func
             unwrap_attempts = 0
-            max_unwrap = 5  # Prevent infinite loops
+            max_unwrap = 10  # Increased to handle more wrapping layers
             
             while unwrap_attempts < max_unwrap:
                 if hasattr(tool_func, '__wrapped__'):
@@ -185,7 +211,12 @@ def build_tool_registry():
             if not callable(tool_func):
                 tool_func = original_func
             
-            tools_map[tool_name] = tool_func
+            if callable(tool_func):
+                tools_map[tool_name] = tool_func
+            else:
+                print(f"DEBUG: Tool {tool_name} is not callable after unwrapping")
+        else:
+            print(f"DEBUG: Could not extract function for tool {tool_name}, type: {type(tool_info)}")
     
     TOOL_REGISTRY = tools_map
     print(f"Built TOOL_REGISTRY with {len(TOOL_REGISTRY)} tools")
