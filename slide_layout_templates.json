@@ -498,6 +498,97 @@
         "overlay_pattern": "subtle_dots"
       }
     },
+    "cover_page_slide": {
+      "name": "OCSC Cover Page",
+      "description": "Two-column cover layout with hero image on the left and stacked text on the right.",
+      "layout_type": "title",
+      "typography_style": "modern_sans",
+      "elements": [
+        {
+          "type": "image",
+          "role": "hero_image",
+          "position": {
+            "left": 0.344,
+            "top": 0.296,
+            "width": 2.413,
+            "height": 1.262
+          },
+          "styling": {
+            "effects": ["professional_shadow"],
+            "border_radius": 12,
+            "overlay_gradient": {
+              "color_role": "primary",
+              "opacity": 0.15,
+              "direction": "diagonal"
+            }
+          },
+          "placeholder_text": "Insert cover image"
+        },
+        {
+          "type": "text",
+          "role": "title",
+          "position": {
+            "left": 9.244,
+            "top": 5.473,
+            "width": 3.908,
+            "height": 0.354
+          },
+          "styling": {
+            "font_type": "title",
+            "font_size": "dynamic",
+            "alignment": "left",
+            "color_role": "primary",
+            "text_effects": ["shadow_soft"],
+            "auto_wrap": true,
+            "auto_fit": true
+          },
+          "placeholder_text": "Presentation Title"
+        },
+        {
+          "type": "text",
+          "role": "subtitle",
+          "position": {
+            "left": 9.244,
+            "top": 5.948,
+            "width": 3.908,
+            "height": 0.354
+          },
+          "styling": {
+            "font_type": "subtitle",
+            "font_size": "medium",
+            "alignment": "left",
+            "color_role": "accent1",
+            "auto_wrap": true,
+            "auto_fit": true,
+            "italic": true
+          },
+          "placeholder_text": "Subtitle or tagline goes here"
+        },
+        {
+          "type": "text",
+          "role": "footer_note",
+          "position": {
+            "left": 9.244,
+            "top": 6.187,
+            "width": 3.908,
+            "height": 0.354
+          },
+          "styling": {
+            "font_type": "body",
+            "font_size": "small",
+            "alignment": "left",
+            "color_role": "text",
+            "auto_wrap": true,
+            "auto_fit": true
+          },
+          "placeholder_text": "Date · Presenter Name · Department"
+        }
+      ],
+      "background": {
+        "type": "solid",
+        "color_role": "light"
+      }
+    },
     "text_with_image": {
       "name": "Dynamic Text + Image",
       "description": "Text content with stylized image and interactive elements",
