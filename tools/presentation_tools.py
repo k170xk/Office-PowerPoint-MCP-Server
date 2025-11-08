@@ -8,12 +8,37 @@ from mcp.server.fastmcp import FastMCP
 import utils as ppt_utils
 
 
-def register_presentation_tools(app: FastMCP, presentations: Dict, get_current_presentation_id, get_template_search_directories):
+def register_presentation_tools(
+    app: FastMCP,
+    presentations: Dict,
+    get_current_presentation_id,
+    get_template_search_directories,
+    set_current_presentation_id=None
+):
     """Register presentation management tools with the FastMCP app"""
     
     @app.tool()
-    def create_presentation(id: Optional[str] = None) -> Dict:
-        """Create a new PowerPoint presentation."""
+    def create_presentation(
+        id: Optional[str] = None,
+        file_path: Optional[str] = None,
+        title: Optional[str] = None,
+        subtitle: Optional[str] = None,
+        slide_layout_index: int = 0,
+        set_as_current: bool = True,
+        auto_save: bool = True
+    ) -> Dict:
+        """
+        Create a new PowerPoint presentation.
+
+        Args:
+            id: Optional presentation identifier (auto-generated when omitted)
+            file_path: Optional path to immediately save the presentation
+            title: Optional title text for the first slide
+            subtitle: Optional subtitle text for the first slide
+            slide_layout_index: Slide layout to use when creating a title slide
+            set_as_current: Whether to mark the created presentation as current
+            auto_save: Save to file_path (when provided) before returning
+        """
         # Create a new presentation
         pres = ppt_utils.create_presentation()
         
@@ -23,13 +48,86 @@ def register_presentation_tools(app: FastMCP, presentations: Dict, get_current_p
         
         # Store the presentation
         presentations[id] = pres
-        # Set as current presentation (this would need to be handled by caller)
+
+        # Optionally set as current presentation
+        if set_as_current and callable(set_current_presentation_id):
+            try:
+                set_current_presentation_id(id)
+            except Exception:
+                pass
+
+        # Optionally add a title slide with provided metadata
+        title_applied = False
+        subtitle_applied = False
+        if title or subtitle:
+            try:
+                slide, _ = ppt_utils.add_slide(pres, slide_layout_index)
+                if title:
+                    try:
+                        ppt_utils.set_title(slide, title)
+                        title_applied = True
+                    except Exception:
+                        pass
+                if subtitle:
+                    try:
+                        # Commonly the subtitle placeholder has index 1
+                        ppt_utils.populate_placeholder(slide, 1, subtitle)
+                        subtitle_applied = True
+                    except Exception:
+                        # Attempt to find a placeholder with matching name as fallback
+                        for placeholder in getattr(slide, "placeholders", []):
+                            try:
+                                if "subtitle" in placeholder.name.lower():
+                                    placeholder.text = subtitle
+                                    subtitle_applied = True
+                                    break
+                            except Exception:
+                                continue
+            except Exception:
+                pass
+
+        saved_path = None
+        # Auto-save the presentation if requested and a path is provided
+        if auto_save and file_path:
+            try:
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            except (FileNotFoundError, TypeError):
+                # Directory portion may be empty (current directory) or invalid
+                pass
+            try:
+                saved_path = ppt_utils.save_presentation(pres, file_path)
+            except Exception as exc:
+                saved_path = None
+                save_error = str(exc)
+            else:
+                save_error = None
+        else:
+            save_error = None
         
-        return {
+        result: Dict[str, Any] = {
             "presentation_id": id,
             "message": f"Created new presentation with ID: {id}",
-            "slide_count": len(pres.slides)
+            "slide_count": len(pres.slides),
+            "title_applied": title_applied,
+            "subtitle_applied": subtitle_applied
         }
+
+        if saved_path:
+            result["file_path"] = saved_path
+            result["saved"] = True
+        else:
+            result["saved"] = False
+
+        if save_error:
+            result["save_error"] = save_error
+
+        # Include echo of provided metadata for transparency
+        if title:
+            result["title"] = title
+        if subtitle:
+            result["subtitle"] = subtitle
+
+        return result
 
     @app.tool()
     def create_presentation_from_template(template_path: str, id: Optional[str] = None) -> Dict:

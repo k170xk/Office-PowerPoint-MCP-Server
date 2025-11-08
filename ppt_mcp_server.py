@@ -227,10 +227,11 @@ def open_presentation_wrapper(original_func):
 
 # Register all tool modules
 register_presentation_tools(
-    app, 
-    presentations, 
-    get_current_presentation_id, 
-    get_template_search_directories
+    app,
+    presentations,
+    get_current_presentation_id,
+    get_template_search_directories,
+    set_current_presentation_id
 )
 
 register_content_tools(

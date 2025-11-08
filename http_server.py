@@ -747,19 +747,77 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                 tool_name = params.get('name')
                 arguments = params.get('arguments', {})
                 
+                async def _call_via_fastmcp(name, args):
+                    """Fallback: delegate to FastMCP's own tool manager/call stack."""
+                    call_targets = []
+                    visited = set()
+                    
+                    for manager_attr in ('_tool_manager', 'tool_manager'):
+                        manager = getattr(app, manager_attr, None)
+                        if manager:
+                            for method_name in ('call_tool', 'invoke_tool', 'run_tool', 'execute_tool'):
+                                if hasattr(manager, method_name):
+                                    label = f"{manager_attr}.{method_name}"
+                                    if label not in visited:
+                                        visited.add(label)
+                                        call_targets.append((label, getattr(manager, method_name)))
+                    
+                    for method_name in ('call_tool', 'invoke_tool', 'run_tool', 'execute_tool'):
+                        if hasattr(app, method_name):
+                            label = f"app.{method_name}"
+                            if label not in visited:
+                                visited.add(label)
+                                call_targets.append((label, getattr(app, method_name)))
+                    
+                    if not call_targets:
+                        return None, None, None
+                    
+                    def _call_patterns():
+                        payload = {
+                            "name": name,
+                            "tool_name": name,
+                            "arguments": dict(args),
+                            "params": dict(args)
+                        }
+                        merged_kwargs = {"arguments": dict(args)}
+                        merged_kwargs.update(dict(args))
+                        return [
+                            ((name, dict(args)), {}),
+                            ((), {'name': name, 'arguments': dict(args)}),
+                            ((name,), {'arguments': dict(args)}),
+                            ((name,), {'params': dict(args)}),
+                            ((), {'tool_name': name, 'arguments': dict(args)}),
+                            ((), {'name': name, 'params': dict(args)}),
+                            ((payload,), {}),
+                            ((payload,), {'context': {}}),
+                            ((name,), dict(args)),
+                            ((), merged_kwargs),
+                        ]
+                    
+                    last_type_error = None
+                    for label, method in call_targets:
+                        patterns = _call_patterns()
+                        for args_tuple, kwargs_dict in patterns:
+                            try:
+                                if asyncio.iscoroutinefunction(method):
+                                    result = await method(*args_tuple, **kwargs_dict)
+                                else:
+                                    result = method(*args_tuple, **kwargs_dict)
+                                    if inspect.isawaitable(result):
+                                        result = await result
+                                print(f"DEBUG call: {name} via {label} using args={args_tuple} kwargs={list(kwargs_dict.keys())}", flush=True)
+                                return result, label, None
+                            except TypeError as te:
+                                last_type_error = te
+                                continue
+                        print(f"DEBUG call: {name} patterns exhausted for {label}", flush=True)
+                    return None, None, last_type_error
+                
                 # Resolve tool function using helper
                 tool_func = resolve_tool_function(tool_name)
 
                 if not callable(tool_func):
-                    print(f"WARNING: Unable to resolve tool function for {tool_name}", flush=True)
-                    return {
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "error": {
-                            "code": -32601,
-                            "message": f"Tool not found: {tool_name}"
-                        }
-                    }
+                    print(f"WARNING: Unable to resolve tool function for {tool_name} via registry, will proxy to FastMCP if possible", flush=True)
                 
                 # Handle file_path parameters - use storage adapter
                 manager = get_presentation_manager()
@@ -838,13 +896,42 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                             # Template not found - will be handled by the tool itself
                             pass
                 
-                # Call the tool directly from TOOL_REGISTRY (like Word MCP)
+                # Call the tool directly if available, otherwise fall back to FastMCP proxy
+                enhanced_result = ""
                 try:
-                    # Call the function directly
-                    if asyncio.iscoroutinefunction(tool_func):
-                        result = await tool_func(**arguments)
-                    else:
-                        result = tool_func(**arguments)
+                    result = None
+                    call_success = False
+                    proxy_label = None
+                    call_error = None
+                    
+                    if callable(tool_func):
+                        try:
+                            if asyncio.iscoroutinefunction(tool_func):
+                                result = await tool_func(**arguments)
+                            else:
+                                result = tool_func(**arguments)
+                                if inspect.isawaitable(result):
+                                    result = await result
+                            call_success = True
+                        except TypeError as te:
+                            call_error = te
+                            print(f"DEBUG call: direct invocation TypeError for {tool_name}: {te}", flush=True)
+                        except Exception:
+                            raise
+                    
+                    if not call_success:
+                        result, proxy_label, proxy_error = await _call_via_fastmcp(tool_name, arguments)
+                        if proxy_label:
+                            print(f"DEBUG call: {tool_name} handled via {proxy_label}", flush=True)
+                        if result is not None:
+                            call_success = True
+                        if proxy_error and not call_error:
+                            call_error = proxy_error
+                    
+                    if not call_success:
+                        if call_error:
+                            raise call_error
+                        raise ValueError(f"Tool not found: {tool_name}")
                     
                     # Track presentation_id to filename mapping
                     if isinstance(result, dict):
