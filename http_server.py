@@ -10,6 +10,8 @@ import asyncio
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, unquote
 import sys
+import inspect
+import typing
 
 # Add the project root to the path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -164,7 +166,11 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                     # Method 1: Try _tool_registry (common in FastMCP)
                     if hasattr(app, '_tool_registry'):
                         for tool_name, tool_info in app._tool_registry.items():
-                            schema = tool_info.get('inputSchema', {}) if isinstance(tool_info, dict) else {}
+                            tool_func = tool_info if callable(tool_info) else (tool_info.get('handler') if isinstance(tool_info, dict) else None)
+                            if tool_func:
+                                schema = self._get_tool_schema(tool_func)
+                            else:
+                                schema = tool_info.get('inputSchema', {}) if isinstance(tool_info, dict) else {}
                             desc = tool_info.get('description', f"Tool: {tool_name}") if isinstance(tool_info, dict) else (getattr(tool_info, '__doc__', None) or f"Tool: {tool_name}")
                             tools.append({
                                 "name": tool_name,
@@ -175,17 +181,26 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                     elif hasattr(app, '_tools'):
                         for tool_name, tool_info in app._tools.items():
                             if isinstance(tool_info, dict):
+                                tool_func = tool_info.get('handler') or tool_info.get('function')
+                                if tool_func and callable(tool_func):
+                                    schema = self._get_tool_schema(tool_func)
+                                else:
+                                    schema = tool_info.get('inputSchema', {})
                                 tools.append({
                                     "name": tool_name,
                                     "description": tool_info.get('description', f"Tool: {tool_name}"),
-                                    "inputSchema": tool_info.get('inputSchema', {"type": "object", "properties": {}})
+                                    "inputSchema": schema if schema else {"type": "object", "properties": {}}
                                 })
                             else:
                                 # tool_info might be a function
+                                if callable(tool_info):
+                                    schema = self._get_tool_schema(tool_info)
+                                else:
+                                    schema = {"type": "object", "properties": {}}
                                 tools.append({
                                     "name": tool_name,
                                     "description": getattr(tool_info, '__doc__', None) or f"Tool: {tool_name}",
-                                    "inputSchema": {"type": "object", "properties": {}}
+                                    "inputSchema": schema
                                 })
                     # Method 3: Try accessing via __dict__ or vars()
                     elif hasattr(app, '__dict__'):
@@ -212,27 +227,172 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                         except:
                             pass
                     
-                    # If still no tools, use fallback
+                    # If still no tools, use fallback - try to get functions from ppt_mcp_server module
                     if not tools:
-                        print("Warning: Could not access FastMCP tools, using fallback list")
+                        print("Warning: Could not access FastMCP tools, trying to extract from module")
+                        # Try to get tool functions from the registered modules
+                        try:
+                            # Import tool modules to access functions
+                            from tools import presentation_tools, content_tools, structural_tools, professional_tools
+                            from tools import template_tools, hyperlink_tools, chart_tools, connector_tools
+                            from tools import master_tools, transition_tools
+                            
+                            # Map tool names to their modules/functions
+                            tool_modules = {
+                                'create_presentation': (presentation_tools, 'create_presentation'),
+                                'create_presentation_from_template': (presentation_tools, 'create_presentation_from_template'),
+                                'open_presentation': (presentation_tools, 'open_presentation'),
+                                'save_presentation': (presentation_tools, 'save_presentation'),
+                                'get_presentation_info': (presentation_tools, 'get_presentation_info'),
+                                'get_template_file_info': (presentation_tools, 'get_template_file_info'),
+                                'set_core_properties': (presentation_tools, 'set_core_properties'),
+                                'add_slide': (content_tools, 'add_slide'),
+                                'get_slide_info': (content_tools, 'get_slide_info'),
+                                'extract_slide_text': (content_tools, 'extract_slide_text'),
+                                'extract_presentation_text': (content_tools, 'extract_presentation_text'),
+                                'populate_placeholder': (content_tools, 'populate_placeholder'),
+                                'add_bullet_points': (content_tools, 'add_bullet_points'),
+                                'manage_text': (content_tools, 'manage_text'),
+                                'manage_image': (content_tools, 'manage_image'),
+                                'add_table': (structural_tools, 'add_table'),
+                                'format_table_cell': (structural_tools, 'format_table_cell'),
+                                'add_shape': (structural_tools, 'add_shape'),
+                                'add_chart': (structural_tools, 'add_chart'),
+                                'update_chart_data': (chart_tools, 'update_chart_data'),
+                                'apply_professional_design': (professional_tools, 'apply_professional_design'),
+                                'apply_picture_effects': (professional_tools, 'apply_picture_effects'),
+                                'manage_fonts': (professional_tools, 'manage_fonts'),
+                                'list_slide_templates': (template_tools, 'list_slide_templates'),
+                                'apply_slide_template': (template_tools, 'apply_slide_template'),
+                                'create_slide_from_template': (template_tools, 'create_slide_from_template'),
+                                'create_presentation_from_templates': (template_tools, 'create_presentation_from_templates'),
+                                'get_template_info': (template_tools, 'get_template_info'),
+                                'auto_generate_presentation': (template_tools, 'auto_generate_presentation'),
+                                'optimize_slide_text': (template_tools, 'optimize_slide_text'),
+                                'manage_hyperlinks': (hyperlink_tools, 'manage_hyperlinks'),
+                                'add_connector': (connector_tools, 'add_connector'),
+                                'manage_slide_masters': (master_tools, 'manage_slide_masters'),
+                                'manage_slide_transitions': (transition_tools, 'manage_slide_transitions'),
+                            }
+                            
+                            # Also check ppt_mcp_server for additional tools
+                            tool_modules['list_presentations'] = (ppt_mcp_server, 'list_presentations')
+                            tool_modules['switch_presentation'] = (ppt_mcp_server, 'switch_presentation')
+                            tool_modules['get_server_info'] = (ppt_mcp_server, 'get_server_info')
+                            
+                            for tool_name in known_tools:
+                                if tool_name in tool_modules:
+                                    module, func_name = tool_modules[tool_name]
+                                    try:
+                                        tool_func = getattr(module, func_name, None)
+                                        if tool_func and callable(tool_func):
+                                            schema = self._get_tool_schema(tool_func)
+                                            desc = getattr(tool_func, '__doc__', None) or f"Tool: {tool_name}"
+                                            tools.append({
+                                                "name": tool_name,
+                                                "description": desc.strip() if desc else f"Tool: {tool_name}",
+                                                "inputSchema": schema
+                                            })
+                                            continue
+                                    except Exception as e:
+                                        print(f"Error extracting schema for {tool_name}: {e}")
+                                
+                                # Fallback if function not found
+                                tools.append({
+                                    "name": tool_name,
+                                    "description": f"Tool: {tool_name}",
+                                    "inputSchema": {"type": "object", "properties": {}}
+                                })
+                        except Exception as e:
+                            print(f"Error extracting tools from modules: {e}")
+                            # Final fallback
+                            for tool_name in known_tools:
+                                tools.append({
+                                    "name": tool_name,
+                                    "description": f"Tool: {tool_name}",
+                                    "inputSchema": {"type": "object", "properties": {}}
+                                })
+                    
+                except Exception as e:
+                    import traceback
+                    print(f"Warning: Could not access FastMCP tools: {e}")
+                    traceback.print_exc()
+                    # Fallback - try to extract from modules (same logic as above)
+                    try:
+                        from tools import presentation_tools, content_tools, structural_tools, professional_tools
+                        from tools import template_tools, hyperlink_tools, chart_tools, connector_tools
+                        from tools import master_tools, transition_tools
+                        
+                        tool_modules = {
+                            'create_presentation': (presentation_tools, 'create_presentation'),
+                            'create_presentation_from_template': (presentation_tools, 'create_presentation_from_template'),
+                            'open_presentation': (presentation_tools, 'open_presentation'),
+                            'save_presentation': (presentation_tools, 'save_presentation'),
+                            'get_presentation_info': (presentation_tools, 'get_presentation_info'),
+                            'get_template_file_info': (presentation_tools, 'get_template_file_info'),
+                            'set_core_properties': (presentation_tools, 'set_core_properties'),
+                            'add_slide': (content_tools, 'add_slide'),
+                            'get_slide_info': (content_tools, 'get_slide_info'),
+                            'extract_slide_text': (content_tools, 'extract_slide_text'),
+                            'extract_presentation_text': (content_tools, 'extract_presentation_text'),
+                            'populate_placeholder': (content_tools, 'populate_placeholder'),
+                            'add_bullet_points': (content_tools, 'add_bullet_points'),
+                            'manage_text': (content_tools, 'manage_text'),
+                            'manage_image': (content_tools, 'manage_image'),
+                            'add_table': (structural_tools, 'add_table'),
+                            'format_table_cell': (structural_tools, 'format_table_cell'),
+                            'add_shape': (structural_tools, 'add_shape'),
+                            'add_chart': (structural_tools, 'add_chart'),
+                            'update_chart_data': (chart_tools, 'update_chart_data'),
+                            'apply_professional_design': (professional_tools, 'apply_professional_design'),
+                            'apply_picture_effects': (professional_tools, 'apply_picture_effects'),
+                            'manage_fonts': (professional_tools, 'manage_fonts'),
+                            'list_slide_templates': (template_tools, 'list_slide_templates'),
+                            'apply_slide_template': (template_tools, 'apply_slide_template'),
+                            'create_slide_from_template': (template_tools, 'create_slide_from_template'),
+                            'create_presentation_from_templates': (template_tools, 'create_presentation_from_templates'),
+                            'get_template_info': (template_tools, 'get_template_info'),
+                            'auto_generate_presentation': (template_tools, 'auto_generate_presentation'),
+                            'optimize_slide_text': (template_tools, 'optimize_slide_text'),
+                            'manage_hyperlinks': (hyperlink_tools, 'manage_hyperlinks'),
+                            'add_connector': (connector_tools, 'add_connector'),
+                            'manage_slide_masters': (master_tools, 'manage_slide_masters'),
+                            'manage_slide_transitions': (transition_tools, 'manage_slide_transitions'),
+                            'list_presentations': (ppt_mcp_server, 'list_presentations'),
+                            'switch_presentation': (ppt_mcp_server, 'switch_presentation'),
+                            'get_server_info': (ppt_mcp_server, 'get_server_info'),
+                        }
+                        
+                        for tool_name in known_tools:
+                            if tool_name in tool_modules:
+                                module, func_name = tool_modules[tool_name]
+                                try:
+                                    tool_func = getattr(module, func_name, None)
+                                    if tool_func and callable(tool_func):
+                                        schema = self._get_tool_schema(tool_func)
+                                        desc = getattr(tool_func, '__doc__', None) or f"Tool: {tool_name}"
+                                        tools.append({
+                                            "name": tool_name,
+                                            "description": desc.strip() if desc else f"Tool: {tool_name}",
+                                            "inputSchema": schema
+                                        })
+                                        continue
+                                except:
+                                    pass
+                            
+                            tools.append({
+                                "name": tool_name,
+                                "description": f"Tool: {tool_name}",
+                                "inputSchema": {"type": "object", "properties": {}}
+                            })
+                    except:
+                        # Final fallback
                         for tool_name in known_tools:
                             tools.append({
                                 "name": tool_name,
                                 "description": f"Tool: {tool_name}",
                                 "inputSchema": {"type": "object", "properties": {}}
                             })
-                    
-                except Exception as e:
-                    import traceback
-                    print(f"Warning: Could not access FastMCP tools: {e}")
-                    traceback.print_exc()
-                    # Fallback to known tools list
-                    for tool_name in known_tools:
-                        tools.append({
-                            "name": tool_name,
-                            "description": f"Tool: {tool_name}",
-                            "inputSchema": {"type": "object", "properties": {}}
-                        })
                 
                 # Ensure we always return at least the known tools
                 if not tools:
@@ -483,6 +643,77 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             import traceback
             traceback.print_exc()
             self.send_error(500, f"Error serving presentation: {str(e)}")
+    
+    def _get_tool_schema(self, tool_func):
+        """Extract JSON schema from tool function signature."""
+        sig = inspect.signature(tool_func)
+        
+        properties = {}
+        required = []
+        
+        # Get docstring for better descriptions
+        docstring = tool_func.__doc__ or ""
+        
+        for param_name, param in sig.parameters.items():
+            if param_name == 'self':
+                continue
+            
+            param_type = param.annotation
+            param_default = param.default
+            
+            # Handle Optional types
+            if hasattr(typing, 'get_origin') and typing.get_origin(param_type) is typing.Union:
+                args = typing.get_args(param_type)
+                # If Union includes None, it's Optional
+                if type(None) in args:
+                    # Get the actual type (not None)
+                    param_type = next((arg for arg in args if arg is not type(None)), str)
+            
+            # Map Python types to JSON schema types
+            prop_schema = {}
+            
+            if param_type == str or param_type == inspect.Parameter.empty or param_type == type(None):
+                prop_schema["type"] = "string"
+            elif param_type == int:
+                prop_schema["type"] = "integer"
+            elif param_type == float:
+                prop_schema["type"] = "number"
+            elif param_type == bool:
+                prop_schema["type"] = "boolean"
+            elif param_type == list or (hasattr(typing, '_GenericAlias') and 'list' in str(param_type)):
+                prop_schema["type"] = "array"
+                prop_schema["items"] = {"type": "string"}  # Default to string array
+            elif param_type == dict:
+                prop_schema["type"] = "object"
+            else:
+                prop_schema["type"] = "string"
+            
+            # Try to extract description from docstring
+            desc = f"Parameter: {param_name}"
+            if docstring:
+                # Look for param_name in docstring
+                import re
+                pattern = rf"{param_name}:\s*([^\n]+)"
+                match = re.search(pattern, docstring)
+                if match:
+                    desc = match.group(1).strip()
+            prop_schema["description"] = desc
+            
+            properties[param_name] = prop_schema
+            
+            # Only require if no default value
+            if param_default == inspect.Parameter.empty:
+                required.append(param_name)
+        
+        schema = {
+            "type": "object",
+            "properties": properties
+        }
+        
+        if required:
+            schema["required"] = required
+        
+        return schema
     
     def log_message(self, format, *args):
         """Override to use print instead of stderr."""
