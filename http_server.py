@@ -43,6 +43,80 @@ _presentation_files = {}  # Maps presentation_id to filename
 # Build tool registry by extracting functions from FastMCP
 TOOL_REGISTRY = {}
 
+
+def _unwrap_callable(func):
+    """Return the underlying callable, unwrapping FastMCP decorators when possible."""
+    if not callable(func):
+        return None
+
+    original = func
+    for _ in range(10):
+        if hasattr(func, "__wrapped__"):
+            func = func.__wrapped__
+        elif hasattr(func, "_func"):
+            func = func._func
+        elif hasattr(func, "func"):
+            func = func.func
+        elif hasattr(func, "__func__"):
+            func = func.__func__
+        else:
+            break
+
+    return func if callable(func) else original
+
+
+def resolve_tool_function(tool_name):
+    """Resolve a tool function from registry, FastMCP internals, or module definitions."""
+    if not TOOL_REGISTRY:
+        try:
+            build_tool_registry()
+        except Exception as exc:
+            print(f"DEBUG: build_tool_registry failed during resolve for {tool_name}: {exc}", flush=True)
+
+    # 1. Registry (fast path)
+    func = TOOL_REGISTRY.get(tool_name)
+    if callable(func):
+        return func
+
+    # 2. Module attribute (functions defined in ppt_mcp_server)
+    if hasattr(ppt_mcp_server, tool_name):
+        module_func = _unwrap_callable(getattr(ppt_mcp_server, tool_name))
+        if callable(module_func):
+            TOOL_REGISTRY[tool_name] = module_func
+            return module_func
+
+    # 3. FastMCP internal dictionaries
+    possible_attrs = ['_tools', 'tools', '_tool_registry', 'tool_registry', '_handlers', 'handlers']
+    for attr in possible_attrs:
+        if hasattr(app, attr):
+            value = getattr(app, attr)
+            if isinstance(value, dict) and tool_name in value:
+                tool_info = value[tool_name]
+                if isinstance(tool_info, dict):
+                    for key in ['handler', 'function', 'func', '_func', 'callable']:
+                        if key in tool_info and callable(tool_info[key]):
+                            func = _unwrap_callable(tool_info[key])
+                            if callable(func):
+                                TOOL_REGISTRY[tool_name] = func
+                                return func
+                elif callable(tool_info):
+                    func = _unwrap_callable(tool_info)
+                    if callable(func):
+                        TOOL_REGISTRY[tool_name] = func
+                        return func
+
+    # 4. Search module namespace for additional wrappers
+    module_dict = vars(ppt_mcp_server)
+    for attr_name, attr_value in module_dict.items():
+        if attr_name.endswith(tool_name) and callable(attr_value):
+            func = _unwrap_callable(attr_value)
+            if callable(func):
+                TOOL_REGISTRY[tool_name] = func
+                return func
+
+    return None
+
+
 def build_tool_registry():
     """Build a registry of all available tools by extracting unwrapped functions from FastMCP."""
     global TOOL_REGISTRY
@@ -598,257 +672,11 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                 tool_name = params.get('name')
                 arguments = params.get('arguments', {})
                 
-                # Try FastMCP's built-in request handler first (if available)
-                # This is the most reliable way since FastMCP knows how to call its own tools
-                try:
-                    # FastMCP might have a handle_request or similar method
-                    if hasattr(app, 'handle_request') or hasattr(app, '_handle_request'):
-                        handler = getattr(app, 'handle_request', None) or getattr(app, '_handle_request', None)
-                        if handler:
-                            # Create a proper MCP request
-                            mcp_request = {
-                                "jsonrpc": "2.0",
-                                "id": request_id,
-                                "method": "tools/call",
-                                "params": {
-                                    "name": tool_name,
-                                    "arguments": arguments
-                                }
-                            }
-                            
-                            # Try to call it (might be async)
-                            import asyncio
-                            try:
-                                if asyncio.iscoroutinefunction(handler):
-                                    # Need to run in async context
-                                    loop = asyncio.get_event_loop()
-                                    if loop.is_running():
-                                        # Can't await in sync context, skip this
-                                        pass
-                                    else:
-                                        result = loop.run_until_complete(handler(mcp_request))
-                                        if result and 'result' in result:
-                                            return {
-                                                "jsonrpc": "2.0",
-                                                "id": request_id,
-                                                "result": result['result']
-                                            }
-                                else:
-                                    result = handler(mcp_request)
-                                    if result and 'result' in result:
-                                        return {
-                                            "jsonrpc": "2.0",
-                                            "id": request_id,
-                                            "result": result['result']
-                                        }
-                            except Exception as e:
-                                print(f"DEBUG: FastMCP handle_request failed: {e}", flush=True)
-                except Exception as e:
-                    print(f"DEBUG: Error trying FastMCP handle_request: {e}", flush=True)
-                
-                # Use TOOL_REGISTRY (like Word MCP) - simple and reliable
-                tool_func = None
-                
-                # First, try to rebuild TOOL_REGISTRY if it's empty
-                if len(TOOL_REGISTRY) == 0:
-                    print(f"Warning: TOOL_REGISTRY is empty, rebuilding...", flush=True)
-                    build_tool_registry()
-                
-                if tool_name in TOOL_REGISTRY:
-                    tool_func = TOOL_REGISTRY[tool_name]
-                
-                # If still not found, try to get from app directly
-                if not tool_func:
-                        tools_dict = getattr(app, '_tools', None) or getattr(app, 'tools', None) or getattr(app, '_tool_registry', None)
-                        if tools_dict and tool_name in tools_dict:
-                            tool_info = tools_dict[tool_name]
-                            if isinstance(tool_info, dict):
-                                tool_func = (tool_info.get('handler') or 
-                                            tool_info.get('function') or 
-                                            tool_info.get('func') or
-                                            tool_info.get('_func') or
-                                            tool_info.get('func'))
-                            elif callable(tool_info):
-                                tool_func = tool_info
-                            
-                            if tool_func:
-                                # Unwrap function
-                                original_func = tool_func
-                                for _ in range(10):
-                                    if hasattr(tool_func, '__wrapped__'):
-                                        tool_func = tool_func.__wrapped__
-                                    elif hasattr(tool_func, '_func'):
-                                        tool_func = tool_func._func
-                                    elif hasattr(tool_func, 'func'):
-                                        tool_func = tool_func.func
-                                    elif hasattr(tool_func, '__func__'):
-                                        tool_func = tool_func.__func__
-                                    else:
-                                        break
-                                
-                                if not callable(tool_func):
-                                    tool_func = original_func
-                                
-                                # Add to registry for next time
-                                TOOL_REGISTRY[tool_name] = tool_func
-                                print(f"Added {tool_name} to TOOL_REGISTRY dynamically", flush=True)
-                
-                # Final fallback: Try FastMCP's call_tool method
-                if not tool_func and hasattr(app, 'call_tool'):
-                        try:
-                            # FastMCP might have a call_tool method
-                            if asyncio.iscoroutinefunction(app.call_tool):
-                                # Would need to await, but we're in sync context
-                                pass
-                            else:
-                                # Try calling it directly
-                                result = app.call_tool(tool_name, arguments)
-                                if result:
-                                    return {
-                                        "jsonrpc": "2.0",
-                                        "id": request_id,
-                                        "result": result
-                                    }
-                        except Exception as e:
-                            print(f"FastMCP call_tool failed: {e}", flush=True)
-                
-                # Final fallback: Try to call tool directly from FastMCP
-                if not tool_func:
-                    print(f"DEBUG: Tool {tool_name} not in TOOL_REGISTRY, trying direct FastMCP access", flush=True)
-                    try:
-                        # Method 1: Try FastMCP's call_tool if it exists
-                        if hasattr(app, 'call_tool'):
-                            try:
-                                if asyncio.iscoroutinefunction(app.call_tool):
-                                    # Async - would need to handle differently
-                                    pass
-                                else:
-                                    result = app.call_tool(tool_name, arguments)
-                                    if result is not None:
-                                        return {
-                                            "jsonrpc": "2.0",
-                                            "id": request_id,
-                                            "result": result
-                                        }
-                            except Exception as e:
-                                print(f"DEBUG: app.call_tool failed: {e}", flush=True)
-                        
-                        # Method 2: Try multiple ways to access FastMCP's tools dict
-                        tools_dict = None
-                        for attr_name in ['_tools', 'tools', '_tool_registry', 'tool_registry', '_handlers', 'handlers']:
-                            if hasattr(app, attr_name):
-                                attr_value = getattr(app, attr_name)
-                                if isinstance(attr_value, dict) and len(attr_value) > 0:
-                                    tools_dict = attr_value
-                                    print(f"DEBUG: Found tools in app.{attr_name} with {len(tools_dict)} items", flush=True)
-                                    break
-                        
-                        # Method 3: Search app.__dict__ for tools
-                        if not tools_dict:
-                            app_dict = vars(app) if hasattr(app, '__dict__') else {}
-                            for key, value in app_dict.items():
-                                if isinstance(value, dict) and len(value) > 0:
-                                    # Check if it looks like a tools dict
-                                    sample_keys = list(value.keys())[:5]
-                                    if all(isinstance(k, str) for k in sample_keys):
-                                        sample_value = list(value.values())[0]
-                                        if callable(sample_value) or (isinstance(sample_value, dict) and any(k in sample_value for k in ['handler', 'function', 'func', '_func'])):
-                                            tools_dict = value
-                                            print(f"DEBUG: Found potential tools dict in app.{key}", flush=True)
-                                            break
-                        
-                        if tools_dict and tool_name in tools_dict:
-                            tool_info = tools_dict[tool_name]
-                            
-                            # Try to get callable handler
-                            handler = None
-                            if isinstance(tool_info, dict):
-                                handler = (tool_info.get('handler') or 
-                                          tool_info.get('function') or 
-                                          tool_info.get('func') or
-                                          tool_info.get('_func') or
-                                          tool_info.get('callable'))
-                            elif callable(tool_info):
-                                handler = tool_info
-                            
-                            if handler:
-                                # Unwrap handler if needed
-                                original_handler = handler
-                                for _ in range(10):
-                                    if hasattr(handler, '__wrapped__'):
-                                        handler = handler.__wrapped__
-                                    elif hasattr(handler, '_func'):
-                                        handler = handler._func
-                                    elif hasattr(handler, 'func'):
-                                        handler = handler.func
-                                    elif hasattr(handler, '__func__'):
-                                        handler = handler.__func__
-                                    else:
-                                        break
-                                
-                                if not callable(handler):
-                                    handler = original_handler
-                                
-                                # Call the handler directly
-                                if callable(handler):
-                                    print(f"DEBUG: Calling {tool_name} directly from FastMCP", flush=True)
-                                    result = handler(**arguments)
-                                    
-                                    # Add to registry for next time
-                                    TOOL_REGISTRY[tool_name] = handler
-                                    
-                                    return {
-                                        "jsonrpc": "2.0",
-                                        "id": request_id,
-                                        "result": result
-                                    }
-                    except Exception as e:
-                        print(f"DEBUG: Direct FastMCP call failed for {tool_name}: {e}", flush=True)
-                        import traceback
-                        traceback.print_exc()
-                
-                # Final final fallback: Try to get function directly from ppt_mcp_server module
-                if not tool_func:
-                    try:
-                        # Try accessing from the imported module
-                        if hasattr(ppt_mcp_server, tool_name):
-                            module_func = getattr(ppt_mcp_server, tool_name)
-                            if callable(module_func):
-                                # Unwrap if needed (FastMCP decorator)
-                                original_func = module_func
-                                for _ in range(10):
-                                    if hasattr(module_func, '__wrapped__'):
-                                        module_func = module_func.__wrapped__
-                                    elif hasattr(module_func, '_func'):
-                                        module_func = module_func._func
-                                    elif hasattr(module_func, 'func'):
-                                        module_func = module_func.func
-                                    elif hasattr(module_func, '__func__'):
-                                        module_func = module_func.__func__
-                                    else:
-                                        break
-                                
-                                if not callable(module_func):
-                                    module_func = original_func
-                                
-                                if callable(module_func):
-                                    print(f"DEBUG: Found {tool_name} in ppt_mcp_server module, calling directly", flush=True)
-                                    result = module_func(**arguments)
-                                    
-                                    # Add to registry for next time
-                                    TOOL_REGISTRY[tool_name] = module_func
-                                    
-                                    return {
-                                        "jsonrpc": "2.0",
-                                        "id": request_id,
-                                        "result": result
-                                    }
-                    except Exception as e:
-                        print(f"DEBUG: Module function call failed for {tool_name}: {e}", flush=True)
-                        import traceback
-                        traceback.print_exc()
-                
-                if not tool_func:
+                # Resolve tool function using helper
+                tool_func = resolve_tool_function(tool_name)
+
+                if not callable(tool_func):
+                    print(f"WARNING: Unable to resolve tool function for {tool_name}", flush=True)
                     return {
                         "jsonrpc": "2.0",
                         "id": request_id,
