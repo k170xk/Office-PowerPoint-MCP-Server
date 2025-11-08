@@ -363,6 +363,7 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                             'manage_slide_masters': (master_tools, 'manage_slide_masters'),
                             'manage_slide_transitions': (transition_tools, 'manage_slide_transitions'),
                             'list_presentations': (ppt_mcp_server, 'list_presentations'),
+                            'list_available_presentations': (ppt_mcp_server, 'list_available_presentations'),
                             'switch_presentation': (ppt_mcp_server, 'switch_presentation'),
                             'get_server_info': (ppt_mcp_server, 'get_server_info'),
                         }
