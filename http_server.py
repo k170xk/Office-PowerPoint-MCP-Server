@@ -234,9 +234,9 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                                 })
                             
                             if len(tools) > 0:
-                                print(f"✓ Successfully extracted schemas for {len(tools)} tools from FastMCP")
-                                # We have tools now - skip other methods
-                                break
+                                schemas_count = sum(1 for t in tools if t.get('inputSchema', {}).get('properties'))
+                                print(f"✓ Extracted {len(tools)} tools from FastMCP, {schemas_count} with schemas")
+                                # Continue to fallback to ensure all tools are included with schemas
                     
                     # PRIORITY 2: Try to get tools via FastMCP's list_tools method (if available)
                     if not tools and hasattr(app, 'list_tools'):
