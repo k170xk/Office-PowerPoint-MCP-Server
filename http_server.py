@@ -974,8 +974,21 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
     def _get_tool_schema_from_source(self, module, func_name, tool_func):
         """Extract schema by parsing the source file directly."""
         try:
-            # Get the source file path
-            source_file = inspect.getfile(module)
+            # Try to get source file from the function first, then module
+            source_file = None
+            try:
+                # Try to get source from the wrapped function
+                if hasattr(tool_func, '__code__'):
+                    source_file = inspect.getfile(tool_func)
+                elif hasattr(tool_func, '__wrapped__'):
+                    source_file = inspect.getfile(tool_func.__wrapped__)
+            except (TypeError, OSError):
+                pass
+            
+            # Fallback to module file
+            if not source_file:
+                source_file = inspect.getfile(module)
+            
             if not os.path.exists(source_file):
                 print(f"Warning: Source file not found: {source_file}")
                 return {"type": "object", "properties": {}}
