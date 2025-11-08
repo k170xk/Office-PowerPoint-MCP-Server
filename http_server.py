@@ -764,10 +764,11 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                 # Final final fallback: Try to get function directly from ppt_mcp_server module
                 if not tool_func:
                     try:
-                        if hasattr(ppt_module, tool_name):
-                            module_func = getattr(ppt_module, tool_name)
+                        # Try accessing from the imported module
+                        if hasattr(ppt_mcp_server, tool_name):
+                            module_func = getattr(ppt_mcp_server, tool_name)
                             if callable(module_func):
-                                # Unwrap if needed
+                                # Unwrap if needed (FastMCP decorator)
                                 original_func = module_func
                                 for _ in range(10):
                                     if hasattr(module_func, '__wrapped__'):
@@ -776,6 +777,8 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                                         module_func = module_func._func
                                     elif hasattr(module_func, 'func'):
                                         module_func = module_func.func
+                                    elif hasattr(module_func, '__func__'):
+                                        module_func = module_func.__func__
                                     else:
                                         break
                                 
@@ -796,6 +799,8 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                                     }
                     except Exception as e:
                         print(f"DEBUG: Module function call failed for {tool_name}: {e}", flush=True)
+                        import traceback
+                        traceback.print_exc()
                 
                 if not tool_func:
                     return {
