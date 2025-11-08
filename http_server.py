@@ -12,6 +12,8 @@ from urllib.parse import urlparse, unquote
 import sys
 import inspect
 import typing
+import ast
+import importlib.util
 
 # Add the project root to the path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -338,18 +340,16 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                                         tool_func = getattr(module, func_name, None)
                                         if tool_func and callable(tool_func):
                                             try:
-                                                schema = self._get_tool_schema(tool_func)
-                                                # Verify schema has properties
+                                                # Try to extract schema from function
+                                                schema = self._get_tool_schema_from_source(module, func_name, tool_func)
+                                                
+                                                # If that failed, try direct signature extraction
                                                 if not schema.get('properties'):
-                                                    print(f"Warning: Empty schema for {tool_name}, checking function signature...")
-                                                    # Try to get signature directly
-                                                    if hasattr(tool_func, '__wrapped__'):
-                                                        unwrapped = tool_func.__wrapped__
-                                                        sig = inspect.signature(unwrapped)
-                                                        print(f"  {tool_name} signature: {sig}")
-                                                    else:
-                                                        sig = inspect.signature(tool_func)
-                                                        print(f"  {tool_name} signature: {sig}")
+                                                    schema = self._get_tool_schema(tool_func)
+                                                
+                                                # If still empty, log it
+                                                if not schema.get('properties'):
+                                                    print(f"Warning: Could not extract schema for {tool_name}")
                                             except Exception as schema_error:
                                                 print(f"Error extracting schema for {tool_name}: {schema_error}")
                                                 import traceback
@@ -964,6 +964,128 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             traceback.print_exc()
             self.send_error(500, f"Error serving presentation: {str(e)}")
     
+    def _get_tool_schema_from_source(self, module, func_name, tool_func):
+        """Extract schema by parsing the source file directly."""
+        try:
+            # Get the source file path
+            source_file = inspect.getfile(module)
+            if not os.path.exists(source_file):
+                return {"type": "object", "properties": {}}
+            
+            # Read and parse the source file
+            with open(source_file, 'r') as f:
+                source_code = f.read()
+            
+            # Parse AST
+            tree = ast.parse(source_code)
+            
+            # Find the function definition
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef) and node.name == func_name:
+                    # Found the function - extract parameters
+                    properties = {}
+                    required = []
+                    
+                    # Get all parameters
+                    args = node.args.args
+                    defaults = node.args.defaults
+                    num_defaults = len(defaults)
+                    num_args = len(args)
+                    
+                    for i, arg in enumerate(args):
+                        if arg.arg == 'self':
+                            continue
+                        
+                        param_name = arg.arg
+                        param_schema = {}
+                        
+                        # Determine if parameter is required (no default value)
+                        has_default = i >= (num_args - num_defaults)
+                        if not has_default:
+                            required.append(param_name)
+                        
+                        # Extract type annotation
+                        if arg.annotation:
+                            # Handle simple types
+                            if isinstance(arg.annotation, ast.Name):
+                                type_name = arg.annotation.id
+                                if type_name == 'int':
+                                    param_schema["type"] = "integer"
+                                elif type_name == 'float':
+                                    param_schema["type"] = "number"
+                                elif type_name == 'bool':
+                                    param_schema["type"] = "boolean"
+                                elif type_name == 'str':
+                                    param_schema["type"] = "string"
+                                elif type_name == 'list' or type_name == 'List':
+                                    param_schema["type"] = "array"
+                                    param_schema["items"] = {"type": "string"}
+                                elif type_name == 'dict' or type_name == 'Dict':
+                                    param_schema["type"] = "object"
+                                else:
+                                    param_schema["type"] = "string"
+                            
+                            # Handle Optional[Type]
+                            elif isinstance(arg.annotation, ast.Subscript):
+                                if isinstance(arg.annotation.value, ast.Name) and arg.annotation.value.id == 'Optional':
+                                    # Get the inner type
+                                    if isinstance(arg.annotation.slice, ast.Name):
+                                        inner_type = arg.annotation.slice.id
+                                        if inner_type == 'int':
+                                            param_schema["type"] = "integer"
+                                        elif inner_type == 'float':
+                                            param_schema["type"] = "number"
+                                        elif inner_type == 'bool':
+                                            param_schema["type"] = "boolean"
+                                        elif inner_type == 'str':
+                                            param_schema["type"] = "string"
+                                        elif inner_type == 'list' or inner_type == 'List':
+                                            param_schema["type"] = "array"
+                                            param_schema["items"] = {"type": "string"}
+                                        else:
+                                            param_schema["type"] = "string"
+                                    else:
+                                        param_schema["type"] = "string"
+                                else:
+                                    param_schema["type"] = "string"
+                            else:
+                                param_schema["type"] = "string"
+                        else:
+                            param_schema["type"] = "string"
+                        
+                        # Try to get description from docstring
+                        if node.body and isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Str):
+                            docstring = node.body[0].value.s
+                            # Look for param_name in docstring
+                            import re
+                            pattern = rf"{param_name}:\s*([^\n]+)"
+                            match = re.search(pattern, docstring)
+                            if match:
+                                param_schema["description"] = match.group(1).strip()
+                            else:
+                                param_schema["description"] = f"Parameter: {param_name}"
+                        else:
+                            param_schema["description"] = f"Parameter: {param_name}"
+                        
+                        properties[param_name] = param_schema
+                    
+                    schema = {
+                        "type": "object",
+                        "properties": properties
+                    }
+                    
+                    if required:
+                        schema["required"] = required
+                    
+                    return schema
+            
+            # Function not found in AST
+            return {"type": "object", "properties": {}}
+            
+        except Exception as e:
+            print(f"Error extracting schema from source for {func_name}: {e}")
+            return {"type": "object", "properties": {}}
+    
     def _get_tool_schema(self, tool_func):
         """Extract JSON schema from tool function signature."""
         # Unwrap if function is wrapped (e.g., by FastMCP decorator)
@@ -991,11 +1113,77 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         if not callable(tool_func):
             tool_func = original_func
         
+        # Try to get signature
+        sig = None
         try:
             sig = inspect.signature(tool_func)
         except (ValueError, TypeError) as e:
-            print(f"Warning: Could not get signature for function: {e}")
-            # Return empty schema if we can't get signature
+            # If signature extraction fails, try to get it from source code
+            try:
+                source = inspect.getsource(tool_func)
+                # Try to parse AST to get function signature
+                tree = ast.parse(source)
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.FunctionDef):
+                        # Found the function definition
+                        # Create a mock signature from AST
+                        params = []
+                        for arg in node.args.args:
+                            if arg.arg != 'self':
+                                param_name = arg.arg
+                                # Try to infer type from annotation
+                                param_type = str
+                                if arg.annotation:
+                                    if isinstance(arg.annotation, ast.Name):
+                                        type_name = arg.annotation.id
+                                        if type_name == 'int':
+                                            param_type = int
+                                        elif type_name == 'float':
+                                            param_type = float
+                                        elif type_name == 'bool':
+                                            param_type = bool
+                                        elif type_name == 'list' or type_name == 'List':
+                                            param_type = list
+                                        elif type_name == 'dict' or type_name == 'Dict':
+                                            param_type = dict
+                                    elif isinstance(arg.annotation, ast.Constant):
+                                        param_type = type(arg.annotation.value)
+                                
+                                # Check if it's Optional
+                                is_optional = False
+                                if isinstance(arg.annotation, ast.Subscript):
+                                    if isinstance(arg.annotation.value, ast.Name) and arg.annotation.value.id == 'Optional':
+                                        is_optional = True
+                                
+                                default_value = inspect.Parameter.empty
+                                # Check for default value in AST (would need to match args with defaults)
+                                params.append((param_name, param_type, is_optional, default_value))
+                        
+                        # Create a mock signature object
+                        class MockParam:
+                            def __init__(self, name, annotation, default):
+                                self.name = name
+                                self.annotation = annotation
+                                self.default = default
+                        
+                        class MockSig:
+                            def __init__(self, params_list):
+                                self.parameters = {}
+                                for i, (name, ann, opt, default) in enumerate(params_list):
+                                    # Adjust for defaults
+                                    if i >= len(params_list) - len(node.args.defaults):
+                                        default_idx = i - (len(params_list) - len(node.args.defaults))
+                                        if default_idx < len(node.args.defaults):
+                                            default = inspect.Parameter.empty  # Would need to evaluate default
+                                    self.parameters[name] = MockParam(name, ann, default)
+                        
+                        sig = MockSig(params)
+                        break
+            except Exception as ast_error:
+                print(f"Warning: Could not get signature from source either: {ast_error}")
+                return {"type": "object", "properties": {}}
+        
+        if sig is None:
             return {"type": "object", "properties": {}}
         
         properties = {}
