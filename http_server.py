@@ -979,105 +979,130 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             # Parse AST
             tree = ast.parse(source_code)
             
-            # Find the function definition
-            for node in ast.walk(tree):
-                if isinstance(node, ast.FunctionDef) and node.name == func_name:
-                    # Found the function - extract parameters
-                    properties = {}
-                    required = []
+            # Find the function definition (could be nested inside register function)
+            def find_function(node, target_name):
+                """Recursively find function definition."""
+                if isinstance(node, ast.FunctionDef) and node.name == target_name:
+                    return node
+                for child in ast.iter_child_nodes(node):
+                    result = find_function(child, target_name)
+                    if result:
+                        return result
+                return None
+            
+            func_node = find_function(tree, func_name)
+            if func_node:
+                # Found the function - extract parameters
+                properties = {}
+                required = []
+                
+                # Get all parameters
+                args = func_node.args.args
+                defaults = func_node.args.defaults
+                num_defaults = len(defaults)
+                num_args = len(args)
+                
+                for i, arg in enumerate(args):
+                    if arg.arg == 'self':
+                        continue
                     
-                    # Get all parameters
-                    args = node.args.args
-                    defaults = node.args.defaults
-                    num_defaults = len(defaults)
-                    num_args = len(args)
+                    param_name = arg.arg
+                    param_schema = {}
                     
-                    for i, arg in enumerate(args):
-                        if arg.arg == 'self':
-                            continue
+                    # Determine if parameter is required (no default value)
+                    has_default = i >= (num_args - num_defaults)
+                    if not has_default:
+                        required.append(param_name)
+                    
+                    # Extract type annotation
+                    if arg.annotation:
+                        # Handle simple types
+                        if isinstance(arg.annotation, ast.Name):
+                            type_name = arg.annotation.id
+                            if type_name == 'int':
+                                param_schema["type"] = "integer"
+                            elif type_name == 'float':
+                                param_schema["type"] = "number"
+                            elif type_name == 'bool':
+                                param_schema["type"] = "boolean"
+                            elif type_name == 'str':
+                                param_schema["type"] = "string"
+                            elif type_name == 'list' or type_name == 'List':
+                                param_schema["type"] = "array"
+                                param_schema["items"] = {"type": "string"}
+                            elif type_name == 'dict' or type_name == 'Dict':
+                                param_schema["type"] = "object"
+                            else:
+                                param_schema["type"] = "string"
                         
-                        param_name = arg.arg
-                        param_schema = {}
-                        
-                        # Determine if parameter is required (no default value)
-                        has_default = i >= (num_args - num_defaults)
-                        if not has_default:
-                            required.append(param_name)
-                        
-                        # Extract type annotation
-                        if arg.annotation:
-                            # Handle simple types
-                            if isinstance(arg.annotation, ast.Name):
-                                type_name = arg.annotation.id
-                                if type_name == 'int':
+                        # Handle Optional[Type] - Python 3.8+ uses ast.Subscript with ast.Index
+                        elif isinstance(arg.annotation, ast.Subscript):
+                            if isinstance(arg.annotation.value, ast.Name) and arg.annotation.value.id == 'Optional':
+                                # Get the inner type - handle both old and new AST formats
+                                slice_value = arg.annotation.slice
+                                if isinstance(slice_value, ast.Name):
+                                    inner_type = slice_value.id
+                                elif isinstance(slice_value, ast.Index):  # Python < 3.9
+                                    if isinstance(slice_value.value, ast.Name):
+                                        inner_type = slice_value.value.id
+                                    else:
+                                        inner_type = 'str'
+                                else:
+                                    inner_type = 'str'
+                                
+                                if inner_type == 'int':
                                     param_schema["type"] = "integer"
-                                elif type_name == 'float':
+                                elif inner_type == 'float':
                                     param_schema["type"] = "number"
-                                elif type_name == 'bool':
+                                elif inner_type == 'bool':
                                     param_schema["type"] = "boolean"
-                                elif type_name == 'str':
+                                elif inner_type == 'str':
                                     param_schema["type"] = "string"
-                                elif type_name == 'list' or type_name == 'List':
+                                elif inner_type == 'list' or inner_type == 'List':
                                     param_schema["type"] = "array"
                                     param_schema["items"] = {"type": "string"}
-                                elif type_name == 'dict' or type_name == 'Dict':
-                                    param_schema["type"] = "object"
-                                else:
-                                    param_schema["type"] = "string"
-                            
-                            # Handle Optional[Type]
-                            elif isinstance(arg.annotation, ast.Subscript):
-                                if isinstance(arg.annotation.value, ast.Name) and arg.annotation.value.id == 'Optional':
-                                    # Get the inner type
-                                    if isinstance(arg.annotation.slice, ast.Name):
-                                        inner_type = arg.annotation.slice.id
-                                        if inner_type == 'int':
-                                            param_schema["type"] = "integer"
-                                        elif inner_type == 'float':
-                                            param_schema["type"] = "number"
-                                        elif inner_type == 'bool':
-                                            param_schema["type"] = "boolean"
-                                        elif inner_type == 'str':
-                                            param_schema["type"] = "string"
-                                        elif inner_type == 'list' or inner_type == 'List':
-                                            param_schema["type"] = "array"
-                                            param_schema["items"] = {"type": "string"}
-                                        else:
-                                            param_schema["type"] = "string"
-                                    else:
-                                        param_schema["type"] = "string"
                                 else:
                                     param_schema["type"] = "string"
                             else:
                                 param_schema["type"] = "string"
                         else:
                             param_schema["type"] = "string"
-                        
-                        # Try to get description from docstring
-                        if node.body and isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Str):
-                            docstring = node.body[0].value.s
-                            # Look for param_name in docstring
-                            import re
-                            pattern = rf"{param_name}:\s*([^\n]+)"
-                            match = re.search(pattern, docstring)
-                            if match:
-                                param_schema["description"] = match.group(1).strip()
-                            else:
-                                param_schema["description"] = f"Parameter: {param_name}"
+                    else:
+                        param_schema["type"] = "string"
+                    
+                    # Try to get description from docstring (handle both ast.Str and ast.Constant)
+                    docstring = None
+                    if func_node.body:
+                        first_stmt = func_node.body[0]
+                        if isinstance(first_stmt, ast.Expr):
+                            if isinstance(first_stmt.value, ast.Str):  # Python < 3.8
+                                docstring = first_stmt.value.s
+                            elif isinstance(first_stmt.value, ast.Constant) and isinstance(first_stmt.value.value, str):  # Python 3.8+
+                                docstring = first_stmt.value.value
+                    
+                    if docstring:
+                        # Look for param_name in docstring
+                        import re
+                        pattern = rf"{param_name}:\s*([^\n]+)"
+                        match = re.search(pattern, docstring)
+                        if match:
+                            param_schema["description"] = match.group(1).strip()
                         else:
                             param_schema["description"] = f"Parameter: {param_name}"
-                        
-                        properties[param_name] = param_schema
+                    else:
+                        param_schema["description"] = f"Parameter: {param_name}"
                     
-                    schema = {
-                        "type": "object",
-                        "properties": properties
-                    }
-                    
-                    if required:
-                        schema["required"] = required
-                    
-                    return schema
+                    properties[param_name] = param_schema
+                
+                schema = {
+                    "type": "object",
+                    "properties": properties
+                }
+                
+                if required:
+                    schema["required"] = required
+                
+                return schema
             
             # Function not found in AST
             return {"type": "object", "properties": {}}
