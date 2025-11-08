@@ -568,26 +568,31 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                 arguments = params.get('arguments', {})
                 
                 # Use TOOL_REGISTRY (like Word MCP) - simple and reliable
-                if tool_name not in TOOL_REGISTRY:
+                tool_func = None
+                
+                if tool_name in TOOL_REGISTRY:
+                    tool_func = TOOL_REGISTRY[tool_name]
+                else:
                     # Try to rebuild TOOL_REGISTRY in case it's empty
                     if len(TOOL_REGISTRY) == 0:
                         print(f"Warning: TOOL_REGISTRY is empty, rebuilding...", flush=True)
                         build_tool_registry()
+                        if tool_name in TOOL_REGISTRY:
+                            tool_func = TOOL_REGISTRY[tool_name]
                     
                     # If still not found, try to get from app directly
-                    if tool_name not in TOOL_REGISTRY:
-                        tools_dict = getattr(app, '_tools', None) or getattr(app, 'tools', None)
+                    if not tool_func:
+                        tools_dict = getattr(app, '_tools', None) or getattr(app, 'tools', None) or getattr(app, '_tool_registry', None)
                         if tools_dict and tool_name in tools_dict:
                             tool_info = tools_dict[tool_name]
                             if isinstance(tool_info, dict):
                                 tool_func = (tool_info.get('handler') or 
                                             tool_info.get('function') or 
                                             tool_info.get('func') or
-                                            tool_info.get('_func'))
+                                            tool_info.get('_func') or
+                                            tool_info.get('func'))
                             elif callable(tool_info):
                                 tool_func = tool_info
-                            else:
-                                tool_func = None
                             
                             if tool_func:
                                 # Unwrap function
@@ -610,28 +615,35 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                                 # Add to registry for next time
                                 TOOL_REGISTRY[tool_name] = tool_func
                                 print(f"Added {tool_name} to TOOL_REGISTRY dynamically", flush=True)
+                    
+                    # Final fallback: Try FastMCP's call_tool method
+                    if not tool_func and hasattr(app, 'call_tool'):
+                        try:
+                            # FastMCP might have a call_tool method
+                            if asyncio.iscoroutinefunction(app.call_tool):
+                                # Would need to await, but we're in sync context
+                                pass
                             else:
-                                return {
-                                    "jsonrpc": "2.0",
-                                    "id": request_id,
-                                    "error": {
-                                        "code": -32601,
-                                        "message": f"Tool not found: {tool_name}"
+                                # Try calling it directly
+                                result = app.call_tool(tool_name, arguments)
+                                if result:
+                                    return {
+                                        "jsonrpc": "2.0",
+                                        "id": request_id,
+                                        "result": result
                                     }
-                                }
-                        else:
-                            return {
-                                "jsonrpc": "2.0",
-                                "id": request_id,
-                                "error": {
-                                    "code": -32601,
-                                    "message": f"Tool not found: {tool_name}"
-                                }
-                            }
-                    else:
-                        tool_func = TOOL_REGISTRY[tool_name]
-                else:
-                    tool_func = TOOL_REGISTRY[tool_name]
+                        except Exception as e:
+                            print(f"FastMCP call_tool failed: {e}", flush=True)
+                
+                if not tool_func:
+                    return {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "error": {
+                            "code": -32601,
+                            "message": f"Tool not found: {tool_name}"
+                        }
+                    }
                 
                 # Handle file_path parameters - use storage adapter
                 manager = get_presentation_manager()
