@@ -761,6 +761,42 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                         import traceback
                         traceback.print_exc()
                 
+                # Final final fallback: Try to get function directly from ppt_mcp_server module
+                if not tool_func:
+                    try:
+                        if hasattr(ppt_module, tool_name):
+                            module_func = getattr(ppt_module, tool_name)
+                            if callable(module_func):
+                                # Unwrap if needed
+                                original_func = module_func
+                                for _ in range(10):
+                                    if hasattr(module_func, '__wrapped__'):
+                                        module_func = module_func.__wrapped__
+                                    elif hasattr(module_func, '_func'):
+                                        module_func = module_func._func
+                                    elif hasattr(module_func, 'func'):
+                                        module_func = module_func.func
+                                    else:
+                                        break
+                                
+                                if not callable(module_func):
+                                    module_func = original_func
+                                
+                                if callable(module_func):
+                                    print(f"DEBUG: Found {tool_name} in ppt_mcp_server module, calling directly", flush=True)
+                                    result = module_func(**arguments)
+                                    
+                                    # Add to registry for next time
+                                    TOOL_REGISTRY[tool_name] = module_func
+                                    
+                                    return {
+                                        "jsonrpc": "2.0",
+                                        "id": request_id,
+                                        "result": result
+                                    }
+                    except Exception as e:
+                        print(f"DEBUG: Module function call failed for {tool_name}: {e}", flush=True)
+                
                 if not tool_func:
                     return {
                         "jsonrpc": "2.0",
