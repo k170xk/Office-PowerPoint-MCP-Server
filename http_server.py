@@ -441,7 +441,13 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                                 try:
                                     tool_func = getattr(module, func_name, None)
                                     if tool_func and callable(tool_func):
-                                        schema = self._get_tool_schema(tool_func)
+                                        # Try to extract schema from source first
+                                        schema = self._get_tool_schema_from_source(module, func_name, tool_func)
+                                        
+                                        # If that failed, try direct signature extraction
+                                        if not schema.get('properties'):
+                                            schema = self._get_tool_schema(tool_func)
+                                        
                                         desc = getattr(tool_func, '__doc__', None) or f"Tool: {tool_name}"
                                         tools.append({
                                             "name": tool_name,
@@ -449,7 +455,8 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                                             "inputSchema": schema
                                         })
                                         continue
-                                except:
+                                except Exception as e:
+                                    print(f"Error in exception handler for {tool_name}: {e}")
                                     pass
                             
                             tools.append({
