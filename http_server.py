@@ -300,30 +300,45 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                 }
             
             elif method == 'tools/list':
-                # Use TOOL_REGISTRY (like Word MCP) - simple and reliable
+                # Try FastMCP's list_tools first (it might have better schema extraction)
                 tools = []
-                for tool_name, tool_func in TOOL_REGISTRY.items():
-                    tools.append({
-                        "name": tool_name,
-                        "description": tool_func.__doc__ or f"Tool: {tool_name}",
-                        "inputSchema": self._get_tool_schema(tool_func)
-                    })
+                try:
+                    if hasattr(app, 'list_tools'):
+                        if asyncio.iscoroutinefunction(app.list_tools):
+                            tools_result = await app.list_tools()
+                        else:
+                            tools_result = app.list_tools()
+                        
+                        if tools_result and 'tools' in tools_result:
+                            fastmcp_tools = tools_result['tools']
+                            if fastmcp_tools and len(fastmcp_tools) > 0:
+                                # Check if schemas are populated
+                                sample = fastmcp_tools[0]
+                                if sample.get('inputSchema', {}).get('properties'):
+                                    print(f"✓ Using FastMCP list_tools with {len(fastmcp_tools)} tools (schemas populated)")
+                                    tools = fastmcp_tools
+                except Exception as e:
+                    print(f"FastMCP list_tools failed: {e}")
                 
-                # Fallback: if TOOL_REGISTRY is empty, try to build it again
-                if not tools:
-                    print("Warning: TOOL_REGISTRY is empty, attempting to rebuild...")
-                    build_tool_registry()
-                    if TOOL_REGISTRY:
-                        for tool_name, tool_func in TOOL_REGISTRY.items():
-                            tools.append({
-                                "name": tool_name,
-                                "description": tool_func.__doc__ or f"Tool: {tool_name}",
-                                "inputSchema": self._get_tool_schema(tool_func)
-                            })
+                # Fallback: Use TOOL_REGISTRY (like Word MCP)
+                if not tools or not any(t.get('inputSchema', {}).get('properties') for t in tools):
+                    print("Using TOOL_REGISTRY for schema extraction...")
+                    tools = []
+                    for tool_name, tool_func in TOOL_REGISTRY.items():
+                        schema = self._get_tool_schema(tool_func)
+                        tools.append({
+                            "name": tool_name,
+                            "description": tool_func.__doc__ or f"Tool: {tool_name}",
+                            "inputSchema": schema
+                        })
+                    
+                    # Check how many have schemas
+                    schemas_count = sum(1 for t in tools if t.get('inputSchema', {}).get('properties'))
+                    print(f"TOOL_REGISTRY: {schemas_count}/{len(tools)} tools have schemas")
                 
                 # Final fallback: if still empty, return known tools with empty schemas
                 if not tools:
-                    print("Warning: No tools found in TOOL_REGISTRY, using fallback list")
+                    print("Warning: No tools found, using fallback list")
                     known_tools = [
                         "create_presentation", "create_presentation_from_template", "open_presentation",
                         "save_presentation", "get_presentation_info", "get_template_file_info", "set_core_properties",
