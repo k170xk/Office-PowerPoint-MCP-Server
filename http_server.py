@@ -342,13 +342,33 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                                 fastmcp_tools = []
                             
                             if fastmcp_tools and len(fastmcp_tools) > 0:
+                                # Convert Tool objects to dicts if needed (FastMCP returns Pydantic models)
+                                tools_list = []
+                                for t in fastmcp_tools:
+                                    if hasattr(t, 'model_dump'):
+                                        # Pydantic v2
+                                        tools_list.append(t.model_dump())
+                                    elif hasattr(t, 'dict'):
+                                        # Pydantic v1
+                                        tools_list.append(t.dict())
+                                    elif isinstance(t, dict):
+                                        tools_list.append(t)
+                                    else:
+                                        # Try to convert manually
+                                        tool_dict = {
+                                            'name': getattr(t, 'name', ''),
+                                            'description': getattr(t, 'description', ''),
+                                            'inputSchema': getattr(t, 'inputSchema', {}) if hasattr(t, 'inputSchema') else {}
+                                        }
+                                        tools_list.append(tool_dict)
+                                
                                 # Check if schemas are populated - count how many have properties
-                                tools_with_schemas = [t for t in fastmcp_tools if t.get('inputSchema', {}).get('properties')]
-                                if len(tools_with_schemas) >= len(fastmcp_tools) * 0.5:  # At least 50% have schemas
-                                    print(f"✓ Using FastMCP list_tools with {len(fastmcp_tools)} tools ({len(tools_with_schemas)} with schemas)")
-                                    tools = fastmcp_tools
+                                tools_with_schemas = [t for t in tools_list if isinstance(t, dict) and t.get('inputSchema', {}).get('properties')]
+                                if len(tools_with_schemas) >= len(tools_list) * 0.5:  # At least 50% have schemas
+                                    print(f"✓ Using FastMCP list_tools with {len(tools_list)} tools ({len(tools_with_schemas)} with schemas)")
+                                    tools = tools_list
                                 else:
-                                    print(f"FastMCP list_tools returned {len(fastmcp_tools)} tools but only {len(tools_with_schemas)} have schemas, will use TOOL_REGISTRY")
+                                    print(f"FastMCP list_tools returned {len(tools_list)} tools but only {len(tools_with_schemas)} have schemas, will use TOOL_REGISTRY")
                 except Exception as e:
                     print(f"FastMCP list_tools failed: {e}")
                     import traceback
