@@ -144,6 +144,21 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             elif method == 'tools/list':
                 # Get tools from FastMCP app
                 tools = []
+                # Known tools list (fallback)
+                known_tools = [
+                    "create_presentation", "create_presentation_from_template", "open_presentation",
+                    "save_presentation", "get_presentation_info", "get_template_file_info", "set_core_properties",
+                    "add_slide", "get_slide_info", "extract_slide_text", "extract_presentation_text",
+                    "populate_placeholder", "add_bullet_points", "manage_text", "manage_image",
+                    "add_table", "format_table_cell", "add_shape", "add_chart", "update_chart_data",
+                    "apply_professional_design", "apply_picture_effects", "manage_fonts",
+                    "list_slide_templates", "apply_slide_template", "create_slide_from_template",
+                    "create_presentation_from_templates", "get_template_info", "auto_generate_presentation",
+                    "optimize_slide_text", "manage_hyperlinks", "add_connector",
+                    "manage_slide_masters", "manage_slide_transitions",
+                    "list_presentations", "switch_presentation", "get_server_info"
+                ]
+                
                 # FastMCP stores tools internally - try multiple ways to access them
                 try:
                     # Method 1: Try _tool_registry (common in FastMCP)
@@ -197,22 +212,9 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                         except:
                             pass
                     
-                    # If still no tools, try inspecting the app's registered functions
+                    # If still no tools, use fallback
                     if not tools:
-                        # Last resort: manually list known tools from the modules
-                        known_tools = [
-                            "create_presentation", "create_presentation_from_template", "open_presentation",
-                            "save_presentation", "get_presentation_info", "get_template_file_info", "set_core_properties",
-                            "add_slide", "get_slide_info", "extract_slide_text", "extract_presentation_text",
-                            "populate_placeholder", "add_bullet_points", "manage_text", "manage_image",
-                            "add_table", "format_table_cell", "add_shape", "add_chart", "update_chart_data",
-                            "apply_professional_design", "apply_picture_effects", "manage_fonts",
-                            "list_slide_templates", "apply_slide_template", "create_slide_from_template",
-                            "create_presentation_from_templates", "get_template_info", "auto_generate_presentation",
-                            "optimize_slide_text", "manage_hyperlinks", "add_connector",
-                            "manage_slide_masters", "manage_slide_transitions",
-                            "list_presentations", "switch_presentation", "get_server_info"
-                        ]
+                        print("Warning: Could not access FastMCP tools, using fallback list")
                         for tool_name in known_tools:
                             tools.append({
                                 "name": tool_name,
@@ -225,19 +227,16 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                     print(f"Warning: Could not access FastMCP tools: {e}")
                     traceback.print_exc()
                     # Fallback to known tools list
-                    known_tools = [
-                        "create_presentation", "create_presentation_from_template", "open_presentation",
-                        "save_presentation", "get_presentation_info", "get_template_file_info", "set_core_properties",
-                        "add_slide", "get_slide_info", "extract_slide_text", "extract_presentation_text",
-                        "populate_placeholder", "add_bullet_points", "manage_text", "manage_image",
-                        "add_table", "format_table_cell", "add_shape", "add_chart", "update_chart_data",
-                        "apply_professional_design", "apply_picture_effects", "manage_fonts",
-                        "list_slide_templates", "apply_slide_template", "create_slide_from_template",
-                        "create_presentation_from_templates", "get_template_info", "auto_generate_presentation",
-                        "optimize_slide_text", "manage_hyperlinks", "add_connector",
-                        "manage_slide_masters", "manage_slide_transitions",
-                        "list_presentations", "switch_presentation", "get_server_info"
-                    ]
+                    for tool_name in known_tools:
+                        tools.append({
+                            "name": tool_name,
+                            "description": f"Tool: {tool_name}",
+                            "inputSchema": {"type": "object", "properties": {}}
+                        })
+                
+                # Ensure we always return at least the known tools
+                if not tools:
+                    print("Warning: No tools found, using fallback list")
                     for tool_name in known_tools:
                         tools.append({
                             "name": tool_name,
