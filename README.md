@@ -800,6 +800,20 @@ set PPT_TEMPLATE_PATH="C:\templates;C:\company_templates"
 3. **Use Template Layouts**: Reference layout indices from template analysis when adding slides  
 4. **Maintain Branding**: Template themes, fonts, and colors are automatically applied to new content
 
+#### Export Existing Slides to Template JSON
+
+Want to promote an existing deck slide into the template catalogue? Run the helper script:
+
+```bash
+python scripts/export_slide_template.py /path/to/Cover_Page.pptx \
+  --slide 0 \
+  --template-id cover_page_slide \
+  --name "Cover Page Slide" \
+  --output cover_page_slide.json
+```
+
+The command emits a ready-to-edit JSON skeleton describing every text/image/table element, so you can drop it straight into `slide_layout_templates.json`.
+
 ### Professional Color Schemes
 
 The server includes 4 built-in professional color schemes:
