@@ -3,7 +3,7 @@ Professional design tools for PowerPoint MCP Server.
 Handles themes, effects, fonts, and advanced formatting.
 """
 from typing import Dict, List, Optional, Any
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 import utils as ppt_utils
 
 

@@ -4,7 +4,7 @@ Handles presentation creation, opening, saving, and core properties.
 """
 from typing import Dict, List, Optional, Any
 import os
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 import utils as ppt_utils
 
 
