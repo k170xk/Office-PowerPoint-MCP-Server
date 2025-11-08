@@ -28,6 +28,73 @@ from storage_adapter import get_storage_adapter
 # Track presentation_id to filename mapping for auto-save
 _presentation_files = {}  # Maps presentation_id to filename
 
+# Build tool registry by extracting functions from FastMCP
+TOOL_REGISTRY = {}
+
+def build_tool_registry():
+    """Build a registry of all available tools by extracting unwrapped functions from FastMCP."""
+    global TOOL_REGISTRY
+    
+    # Access FastMCP's tools dict
+    tools_dict = None
+    if hasattr(app, '_tools'):
+        tools_dict = app._tools
+    elif hasattr(app, 'tools'):
+        tools_dict = app.tools
+    
+    if not tools_dict or len(tools_dict) == 0:
+        print("Warning: FastMCP tools dict not found or empty")
+        return
+    
+    # Extract unwrapped function objects
+    tools_map = {}
+    for tool_name, tool_info in tools_dict.items():
+        tool_func = None
+        
+        # Get the actual function - FastMCP might wrap it in different ways
+        if isinstance(tool_info, dict):
+            # Try multiple keys to find the function
+            tool_func = (tool_info.get('handler') or 
+                        tool_info.get('function') or 
+                        tool_info.get('func') or
+                        tool_info.get('_func'))
+        elif callable(tool_info):
+            tool_func = tool_info
+        
+        if tool_func:
+            # Unwrap if function is decorated (e.g., by FastMCP decorator)
+            original_func = tool_func
+            unwrap_attempts = 0
+            max_unwrap = 5  # Prevent infinite loops
+            
+            while unwrap_attempts < max_unwrap:
+                if hasattr(tool_func, '__wrapped__'):
+                    tool_func = tool_func.__wrapped__
+                    unwrap_attempts += 1
+                elif hasattr(tool_func, '_func'):
+                    tool_func = tool_func._func
+                    unwrap_attempts += 1
+                elif hasattr(tool_func, 'func'):
+                    tool_func = tool_func.func
+                    unwrap_attempts += 1
+                elif hasattr(tool_func, '__func__'):
+                    tool_func = tool_func.__func__
+                    unwrap_attempts += 1
+                else:
+                    break
+            
+            # If we couldn't unwrap, use the original
+            if not callable(tool_func):
+                tool_func = original_func
+            
+            tools_map[tool_name] = tool_func
+    
+    TOOL_REGISTRY = tools_map
+    print(f"Built TOOL_REGISTRY with {len(TOOL_REGISTRY)} tools")
+
+# Build registry after tools are registered (ppt_mcp_server import registers all tools)
+build_tool_registry()
+
 # Presentation storage directory
 PRESENTATIONS_DIR = os.getenv('PRESENTATIONS_DIR', './presentations')
 BASE_URL = os.getenv('BASE_URL', '')  # Will be set from Render service URL
@@ -158,476 +225,43 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                 }
             
             elif method == 'tools/list':
-                # Get tools from FastMCP app
+                # Use TOOL_REGISTRY (like Word MCP) - simple and reliable
                 tools = []
-                # Known tools list (fallback)
-                known_tools = [
-                    "create_presentation", "create_presentation_from_template", "open_presentation",
-                    "save_presentation", "get_presentation_info", "get_template_file_info", "set_core_properties",
-                    "add_slide", "get_slide_info", "extract_slide_text", "extract_presentation_text",
-                    "populate_placeholder", "add_bullet_points", "manage_text", "manage_image",
-                    "add_table", "format_table_cell", "add_shape", "add_chart", "update_chart_data",
-                    "apply_professional_design", "apply_picture_effects", "manage_fonts",
-                    "list_slide_templates", "apply_slide_template", "create_slide_from_template",
-                    "create_presentation_from_templates", "get_template_info", "auto_generate_presentation",
-                    "optimize_slide_text", "manage_hyperlinks", "add_connector",
-                            "manage_slide_masters", "manage_slide_transitions",
-                            "list_presentations", "list_available_presentations", "switch_presentation", "get_server_info"
-                ]
+                for tool_name, tool_func in TOOL_REGISTRY.items():
+                    tools.append({
+                        "name": tool_name,
+                        "description": tool_func.__doc__ or f"Tool: {tool_name}",
+                        "inputSchema": self._get_tool_schema(tool_func)
+                    })
                 
-                # FastMCP stores tools internally - try multiple ways to access them
-                try:
-                    # PRIORITY 1: Try app._tools or app.tools FIRST - this has the actual function objects
-                    # This should work for all tools registered with FastMCP
-                    tools_dict = None
-                    if hasattr(app, '_tools'):
-                        tools_dict = app._tools
-                        print(f"Found app._tools with {len(tools_dict) if tools_dict else 0} tools")
-                    elif hasattr(app, 'tools'):
-                        tools_dict = app.tools
-                        print(f"Found app.tools with {len(tools_dict) if tools_dict else 0} tools")
-                    
-                    if tools_dict and len(tools_dict) > 0:
-                        print(f"✓ Found FastMCP tools dict with {len(tools_dict)} tools, extracting schemas...")
-                        # Try to extract schemas from FastMCP's internal storage
-                        for tool_name, tool_info in tools_dict.items():
-                            schema = None
-                            tool_func = None
-                            
-                            # Get the actual function - FastMCP might wrap it in different ways
-                            if isinstance(tool_info, dict):
-                                # Try multiple keys
-                                tool_func = (tool_info.get('handler') or 
-                                           tool_info.get('function') or 
-                                           tool_info.get('func') or
-                                           tool_info.get('_func'))
-                                # FastMCP might store schema in tool_info
-                                schema = tool_info.get('inputSchema') or tool_info.get('schema')
-                            elif callable(tool_info):
-                                tool_func = tool_info
-                            
-                            # If no schema stored, extract from function
-                            if not schema or not schema.get('properties'):
-                                if tool_func:
-                                    # Try to extract schema from function signature (with unwrapping)
-                                    try:
-                                        schema = self._get_tool_schema(tool_func)
-                                        if schema.get('properties'):
-                                            print(f"  ✓ Extracted schema for {tool_name} via signature ({len(schema.get('properties', {}))} params)")
-                                    except Exception as e:
-                                        print(f"  Error extracting schema for {tool_name} via signature: {e}")
-                                    
-                                    # If that failed, try source parsing
-                                    if not schema or not schema.get('properties'):
-                                        try:
-                                            func_module = inspect.getmodule(tool_func)
-                                            if func_module:
-                                                schema = self._get_tool_schema_from_source(func_module, tool_name, tool_func)
-                                                if schema.get('properties'):
-                                                    print(f"  ✓ Extracted schema for {tool_name} from source ({len(schema.get('properties', {}))} params)")
-                                        except Exception as e:
-                                            print(f"  Error extracting schema for {tool_name} via source: {e}")
-                            
-                            # Use empty schema if still nothing
-                            if not schema or not schema.get('properties'):
-                                schema = {"type": "object", "properties": {}}
-                            
-                            # Get description
-                            desc = None
-                            if isinstance(tool_info, dict):
-                                desc = tool_info.get('description')
-                            if not desc and tool_func:
-                                desc = getattr(tool_func, '__doc__', None)
-                            
-                            tools.append({
-                                "name": tool_name,
-                                "description": desc or f"Tool: {tool_name}",
-                                "inputSchema": schema
-                            })
-                        
-                        schemas_count = sum(1 for t in tools if t.get('inputSchema', {}).get('properties'))
-                        print(f"✓ Extracted {len(tools)} tools from FastMCP, {schemas_count} with schemas")
-                        # Continue to fallback to ensure all tools are included with schemas
-                    
-                    # PRIORITY 2: Try to get tools via FastMCP's list_tools method (if available)
-                    if not tools and hasattr(app, 'list_tools'):
-                        try:
-                            tool_list_result = await app.list_tools()
-                            if tool_list_result and 'tools' in tool_list_result:
-                                fastmcp_tools = tool_list_result['tools']
-                                if fastmcp_tools and len(fastmcp_tools) > 0:
-                                    # Check if schemas are populated
-                                    sample_tool = fastmcp_tools[0]
-                                    if sample_tool.get('inputSchema', {}).get('properties'):
-                                        print(f"✓ Found {len(fastmcp_tools)} tools from FastMCP list_tools with schemas")
-                                        tools = fastmcp_tools
-                                    else:
-                                        print(f"Found {len(fastmcp_tools)} tools from FastMCP but schemas are empty")
-                        except Exception as e:
-                            print(f"FastMCP list_tools failed: {e}")
-                    
-                    # PRIORITY 3: Try _tool_registry (common in FastMCP)
-                    if not tools and hasattr(app, '_tool_registry'):
-                        tools_dict = getattr(app, '_tools', None) or getattr(app, 'tools', None)
-                        if tools_dict and len(tools_dict) > 0:
-                            print(f"✓ Found FastMCP tools dict with {len(tools_dict)} tools, extracting schemas...")
-                            # Try to extract schemas from FastMCP's internal storage
-                            for tool_name, tool_info in tools_dict.items():
-                                schema = None
-                                tool_func = None
-                                
-                                # Get the actual function
-                                if isinstance(tool_info, dict):
-                                    tool_func = tool_info.get('handler') or tool_info.get('function') or tool_info.get('func')
-                                    # FastMCP might store schema in tool_info
-                                    schema = tool_info.get('inputSchema') or tool_info.get('schema')
-                                elif callable(tool_info):
-                                    tool_func = tool_info
-                                
-                                # If no schema stored, extract from function
-                                if not schema or not schema.get('properties'):
-                                    if tool_func:
-                                        # Try to extract schema from function signature (with unwrapping)
-                                        try:
-                                            schema = self._get_tool_schema(tool_func)
-                                        except Exception as e:
-                                            print(f"  Error extracting schema for {tool_name} via signature: {e}")
-                                        
-                                        # If that failed, try source parsing
-                                        if not schema or not schema.get('properties'):
-                                            try:
-                                                func_module = inspect.getmodule(tool_func)
-                                                if func_module:
-                                                    schema = self._get_tool_schema_from_source(func_module, tool_name, tool_func)
-                                                    if schema.get('properties'):
-                                                        print(f"  ✓ Extracted schema for {tool_name} from source ({len(schema.get('properties', {}))} params)")
-                                            except Exception as e:
-                                                print(f"  Error extracting schema for {tool_name} via source: {e}")
-                                
-                                # Use empty schema if still nothing
-                                if not schema or not schema.get('properties'):
-                                    schema = {"type": "object", "properties": {}}
-                                
-                                # Get description
-                                desc = None
-                                if isinstance(tool_info, dict):
-                                    desc = tool_info.get('description')
-                                if not desc and tool_func:
-                                    desc = getattr(tool_func, '__doc__', None)
-                                
-                                tools.append({
-                                    "name": tool_name,
-                                    "description": desc or f"Tool: {tool_name}",
-                                    "inputSchema": schema
-                                })
-                            
-                            if len(tools) > 0:
-                                print(f"✓ Successfully extracted schemas for {len(tools)} tools from FastMCP")
-                                # Don't continue to fallback - we have tools now
-                                # But we still want to ensure all known_tools are included
-                    
-                    # Also try accessing FastMCP's internal server if available
-                    if not tools and hasattr(app, '_server'):
-                        try:
-                            if hasattr(app._server, 'list_tools'):
-                                server_result = await app._server.list_tools({})
-                                if server_result and 'tools' in server_result:
-                                    fastmcp_tools = server_result['tools']
-                                    if fastmcp_tools and len(fastmcp_tools) > 0:
-                                        sample_tool = fastmcp_tools[0]
-                                        if sample_tool.get('inputSchema', {}).get('properties'):
-                                            print(f"✓ Found {len(fastmcp_tools)} tools from FastMCP _server with schemas")
-                                            tools = fastmcp_tools
-                        except Exception as e:
-                            print(f"FastMCP _server.list_tools failed: {e}")
-                    
-                    # Method 2: Try _tool_registry (common in FastMCP)
-                    if not tools and hasattr(app, '_tool_registry'):
-                        print("Trying _tool_registry...")
-                        for tool_name, tool_info in app._tool_registry.items():
-                            # FastMCP might store schema directly
-                            if isinstance(tool_info, dict) and 'inputSchema' in tool_info:
-                                schema = tool_info.get('inputSchema', {})
-                            else:
-                                tool_func = tool_info if callable(tool_info) else (tool_info.get('handler') if isinstance(tool_info, dict) else None)
-                                if tool_func:
-                                    schema = self._get_tool_schema(tool_func)
-                                else:
-                                    schema = tool_info.get('inputSchema', {}) if isinstance(tool_info, dict) else {}
-                            desc = tool_info.get('description', f"Tool: {tool_name}") if isinstance(tool_info, dict) else (getattr(tool_info, '__doc__', None) or f"Tool: {tool_name}")
-                            tools.append({
-                                "name": tool_name,
-                                "description": desc,
-                                "inputSchema": schema if schema else {"type": "object", "properties": {}}
-                            })
-                    # Method 3: Try _tools attribute
-                    if not tools and hasattr(app, '_tools'):
-                        print("Trying _tools attribute...")
-                        for tool_name, tool_info in app._tools.items():
-                            if isinstance(tool_info, dict):
-                                tool_func = tool_info.get('handler') or tool_info.get('function')
-                                if tool_func and callable(tool_func):
-                                    schema = self._get_tool_schema(tool_func)
-                                else:
-                                    schema = tool_info.get('inputSchema', {})
-                                tools.append({
-                                    "name": tool_name,
-                                    "description": tool_info.get('description', f"Tool: {tool_name}"),
-                                    "inputSchema": schema if schema else {"type": "object", "properties": {}}
-                                })
-                            else:
-                                # tool_info might be a function
-                                if callable(tool_info):
-                                    schema = self._get_tool_schema(tool_info)
-                                else:
-                                    schema = {"type": "object", "properties": {}}
-                                tools.append({
-                                    "name": tool_name,
-                                    "description": getattr(tool_info, '__doc__', None) or f"Tool: {tool_name}",
-                                    "inputSchema": schema
-                                })
-                    # Method 3: Try accessing via __dict__ or vars()
-                    elif hasattr(app, '__dict__'):
-                        app_dict = vars(app)
-                        for key, value in app_dict.items():
-                            if 'tool' in key.lower() and isinstance(value, dict):
-                                for tool_name, tool_info in value.items():
-                                    tools.append({
-                                        "name": tool_name,
-                                        "description": tool_info.get('description', f"Tool: {tool_name}") if isinstance(tool_info, dict) else f"Tool: {tool_name}",
-                                        "inputSchema": tool_info.get('inputSchema', {"type": "object", "properties": {}}) if isinstance(tool_info, dict) else {"type": "object", "properties": {}}
-                                    })
-                    # Method 4: Use FastMCP's internal server to handle the request
-                    else:
-                        # Create a mock request and use FastMCP's handler
-                        from mcp.server.fastmcp import FastMCP
-                        # Try to get tools via the server's internal handler
-                        try:
-                            # FastMCP might have a _server attribute
-                            if hasattr(app, '_server') and hasattr(app._server, 'list_tools'):
-                                result = await app._server.list_tools({})
-                                if result and 'tools' in result:
-                                    tools = result['tools']
-                        except:
-                            pass
-                    
-                    # ALWAYS use fallback - extract from source files for ALL tools to ensure schemas
-                    # This ensures we get schemas even if FastMCP's tools dict doesn't have them
-                    print("Extracting schemas from source files for all tools...")
-                    # Try to get tool functions from the registered modules
-                    try:
-                        # Import tool modules to access functions
-                            from tools import presentation_tools, content_tools, structural_tools, professional_tools
-                            from tools import template_tools, hyperlink_tools, chart_tools, connector_tools
-                            from tools import master_tools, transition_tools
-                            
-                            # Map tool names to their modules/functions
-                            tool_modules = {
-                                'create_presentation': (presentation_tools, 'create_presentation'),
-                                'create_presentation_from_template': (presentation_tools, 'create_presentation_from_template'),
-                                'open_presentation': (presentation_tools, 'open_presentation'),
-                                'save_presentation': (presentation_tools, 'save_presentation'),
-                                'get_presentation_info': (presentation_tools, 'get_presentation_info'),
-                                'get_template_file_info': (presentation_tools, 'get_template_file_info'),
-                                'set_core_properties': (presentation_tools, 'set_core_properties'),
-                                'add_slide': (content_tools, 'add_slide'),
-                                'get_slide_info': (content_tools, 'get_slide_info'),
-                                'extract_slide_text': (content_tools, 'extract_slide_text'),
-                                'extract_presentation_text': (content_tools, 'extract_presentation_text'),
-                                'populate_placeholder': (content_tools, 'populate_placeholder'),
-                                'add_bullet_points': (content_tools, 'add_bullet_points'),
-                                'manage_text': (content_tools, 'manage_text'),
-                                'manage_image': (content_tools, 'manage_image'),
-                                'add_table': (structural_tools, 'add_table'),
-                                'format_table_cell': (structural_tools, 'format_table_cell'),
-                                'add_shape': (structural_tools, 'add_shape'),
-                                'add_chart': (structural_tools, 'add_chart'),
-                                'update_chart_data': (chart_tools, 'update_chart_data'),
-                                'apply_professional_design': (professional_tools, 'apply_professional_design'),
-                                'apply_picture_effects': (professional_tools, 'apply_picture_effects'),
-                                'manage_fonts': (professional_tools, 'manage_fonts'),
-                                'list_slide_templates': (template_tools, 'list_slide_templates'),
-                                'apply_slide_template': (template_tools, 'apply_slide_template'),
-                                'create_slide_from_template': (template_tools, 'create_slide_from_template'),
-                                'create_presentation_from_templates': (template_tools, 'create_presentation_from_templates'),
-                                'get_template_info': (template_tools, 'get_template_info'),
-                                'auto_generate_presentation': (template_tools, 'auto_generate_presentation'),
-                                'optimize_slide_text': (template_tools, 'optimize_slide_text'),
-                                'manage_hyperlinks': (hyperlink_tools, 'manage_hyperlinks'),
-                                'add_connector': (connector_tools, 'add_connector'),
-                                'manage_slide_masters': (master_tools, 'manage_slide_masters'),
-                                'manage_slide_transitions': (transition_tools, 'manage_slide_transitions'),
-                            }
-                            
-                            # Also check ppt_mcp_server for additional tools
-                            tool_modules['list_presentations'] = (ppt_mcp_server, 'list_presentations')
-                            tool_modules['list_available_presentations'] = (ppt_mcp_server, 'list_available_presentations')
-                            tool_modules['switch_presentation'] = (ppt_mcp_server, 'switch_presentation')
-                            tool_modules['get_server_info'] = (ppt_mcp_server, 'get_server_info')
-                            
-                            # Build existing tools dict for updating schemas
-                            existing_tools_dict = {t.get('name'): t for t in tools}
-                            
-                            for tool_name in known_tools:
-                                if tool_name in tool_modules:
-                                    module, func_name = tool_modules[tool_name]
-                                    try:
-                                        # Always try to extract schema from source file first (works even if function is nested)
-                                        schema = None
-                                        try:
-                                            schema = self._get_tool_schema_from_source(module, func_name, None)
-                                            if schema.get('properties'):
-                                                print(f"  ✓ Extracted schema for {tool_name} from source ({len(schema.get('properties', {}))} params)")
-                                        except Exception as e:
-                                            print(f"  Source parsing failed for {tool_name}: {e}")
-                                        
-                                        # If that failed, try to get function and extract from it
-                                        if not schema or not schema.get('properties'):
-                                            tool_func = getattr(module, func_name, None)
-                                            if tool_func and callable(tool_func):
-                                                try:
-                                                    schema = self._get_tool_schema(tool_func)
-                                                except:
-                                                    pass
-                                        
-                                        # If still empty, use empty schema but log it
-                                        if not schema or not schema.get('properties'):
-                                            print(f"  Warning: Could not extract schema for {tool_name}")
-                                            schema = {"type": "object", "properties": {}}
-                                        
-                                        # Get description
-                                        desc = f"Tool: {tool_name}"
-                                        tool_func = getattr(module, func_name, None)
-                                        if tool_func and callable(tool_func):
-                                            desc = getattr(tool_func, '__doc__', None) or desc
-                                        
-                                        # Update existing tool or add new one
-                                        if tool_name in existing_tools_dict:
-                                            # Update existing tool's schema if we got one
-                                            if schema.get('properties'):
-                                                existing_tools_dict[tool_name]['inputSchema'] = schema
-                                                print(f"  ✓ Updated schema for {tool_name} ({len(schema.get('properties', {}))} params)")
-                                        else:
-                                            # Add new tool
-                                            tools.append({
-                                                "name": tool_name,
-                                                "description": desc.strip() if desc else f"Tool: {tool_name}",
-                                                "inputSchema": schema
-                                            })
-                                        continue
-                                    except Exception as e:
-                                        print(f"Error processing tool {tool_name}: {e}")
-                                        import traceback
-                                        traceback.print_exc()
-                                
-                                # Fallback if function not found
-                                tools.append({
-                                    "name": tool_name,
-                                    "description": f"Tool: {tool_name}",
-                                    "inputSchema": {"type": "object", "properties": {}}
-                                })
-                        except Exception as e:
-                            print(f"Error extracting tools from modules: {e}")
-                            # Final fallback
-                            for tool_name in known_tools:
-                                tools.append({
-                                    "name": tool_name,
-                                    "description": f"Tool: {tool_name}",
-                                    "inputSchema": {"type": "object", "properties": {}}
-                                })
-                    
-                except Exception as e:
-                    import traceback
-                    print(f"Warning: Could not access FastMCP tools: {e}")
-                    traceback.print_exc()
-                    # Fallback - try to extract from modules (same logic as above)
-                    try:
-                        from tools import presentation_tools, content_tools, structural_tools, professional_tools
-                        from tools import template_tools, hyperlink_tools, chart_tools, connector_tools
-                        from tools import master_tools, transition_tools
-                        
-                        tool_modules = {
-                            'create_presentation': (presentation_tools, 'create_presentation'),
-                            'create_presentation_from_template': (presentation_tools, 'create_presentation_from_template'),
-                            'open_presentation': (presentation_tools, 'open_presentation'),
-                            'save_presentation': (presentation_tools, 'save_presentation'),
-                            'get_presentation_info': (presentation_tools, 'get_presentation_info'),
-                            'get_template_file_info': (presentation_tools, 'get_template_file_info'),
-                            'set_core_properties': (presentation_tools, 'set_core_properties'),
-                            'add_slide': (content_tools, 'add_slide'),
-                            'get_slide_info': (content_tools, 'get_slide_info'),
-                            'extract_slide_text': (content_tools, 'extract_slide_text'),
-                            'extract_presentation_text': (content_tools, 'extract_presentation_text'),
-                            'populate_placeholder': (content_tools, 'populate_placeholder'),
-                            'add_bullet_points': (content_tools, 'add_bullet_points'),
-                            'manage_text': (content_tools, 'manage_text'),
-                            'manage_image': (content_tools, 'manage_image'),
-                            'add_table': (structural_tools, 'add_table'),
-                            'format_table_cell': (structural_tools, 'format_table_cell'),
-                            'add_shape': (structural_tools, 'add_shape'),
-                            'add_chart': (structural_tools, 'add_chart'),
-                            'update_chart_data': (chart_tools, 'update_chart_data'),
-                            'apply_professional_design': (professional_tools, 'apply_professional_design'),
-                            'apply_picture_effects': (professional_tools, 'apply_picture_effects'),
-                            'manage_fonts': (professional_tools, 'manage_fonts'),
-                            'list_slide_templates': (template_tools, 'list_slide_templates'),
-                            'apply_slide_template': (template_tools, 'apply_slide_template'),
-                            'create_slide_from_template': (template_tools, 'create_slide_from_template'),
-                            'create_presentation_from_templates': (template_tools, 'create_presentation_from_templates'),
-                            'get_template_info': (template_tools, 'get_template_info'),
-                            'auto_generate_presentation': (template_tools, 'auto_generate_presentation'),
-                            'optimize_slide_text': (template_tools, 'optimize_slide_text'),
-                            'manage_hyperlinks': (hyperlink_tools, 'manage_hyperlinks'),
-                            'add_connector': (connector_tools, 'add_connector'),
-                            'manage_slide_masters': (master_tools, 'manage_slide_masters'),
-                            'manage_slide_transitions': (transition_tools, 'manage_slide_transitions'),
-                            'list_presentations': (ppt_mcp_server, 'list_presentations'),
-                            'list_available_presentations': (ppt_mcp_server, 'list_available_presentations'),
-                            'switch_presentation': (ppt_mcp_server, 'switch_presentation'),
-                            'get_server_info': (ppt_mcp_server, 'get_server_info'),
-                        }
-                        
-                        for tool_name in known_tools:
-                            if tool_name in tool_modules:
-                                module, func_name = tool_modules[tool_name]
-                                try:
-                                    tool_func = getattr(module, func_name, None)
-                                    if tool_func and callable(tool_func):
-                                        # Try to extract schema from source first
-                                        schema = self._get_tool_schema_from_source(module, func_name, tool_func)
-                                        
-                                        # If that failed, try direct signature extraction
-                                        if not schema.get('properties'):
-                                            schema = self._get_tool_schema(tool_func)
-                                        
-                                        desc = getattr(tool_func, '__doc__', None) or f"Tool: {tool_name}"
-                                        tools.append({
-                                            "name": tool_name,
-                                            "description": desc.strip() if desc else f"Tool: {tool_name}",
-                                            "inputSchema": schema
-                                        })
-                                        continue
-                                except Exception as e:
-                                    print(f"Error in exception handler for {tool_name}: {e}")
-                                    pass
-                            
-                            tools.append({
-                                "name": tool_name,
-                                "description": f"Tool: {tool_name}",
-                                "inputSchema": {"type": "object", "properties": {}}
-                            })
-                    except:
-                        # Final fallback
-                        for tool_name in known_tools:
-                            tools.append({
-                                "name": tool_name,
-                                "description": f"Tool: {tool_name}",
-                                "inputSchema": {"type": "object", "properties": {}}
-                            })
-                
-                # Ensure we always return at least the known tools
+                # Fallback: if TOOL_REGISTRY is empty, try to build it again
                 if not tools:
-                    print("Warning: No tools found, using fallback list")
+                    print("Warning: TOOL_REGISTRY is empty, attempting to rebuild...")
+                    build_tool_registry()
+                    if TOOL_REGISTRY:
+                        for tool_name, tool_func in TOOL_REGISTRY.items():
+                            tools.append({
+                                "name": tool_name,
+                                "description": tool_func.__doc__ or f"Tool: {tool_name}",
+                                "inputSchema": self._get_tool_schema(tool_func)
+                            })
+                
+                # Final fallback: if still empty, return known tools with empty schemas
+                if not tools:
+                    print("Warning: No tools found in TOOL_REGISTRY, using fallback list")
+                    known_tools = [
+                        "create_presentation", "create_presentation_from_template", "open_presentation",
+                        "save_presentation", "get_presentation_info", "get_template_file_info", "set_core_properties",
+                        "add_slide", "get_slide_info", "extract_slide_text", "extract_presentation_text",
+                        "populate_placeholder", "add_bullet_points", "manage_text", "manage_image",
+                        "add_table", "format_table_cell", "add_shape", "add_chart", "update_chart_data",
+                        "apply_professional_design", "apply_picture_effects", "manage_fonts",
+                        "list_slide_templates", "apply_slide_template", "create_slide_from_template",
+                        "create_presentation_from_templates", "get_template_info", "auto_generate_presentation",
+                        "optimize_slide_text", "manage_hyperlinks", "add_connector",
+                        "manage_slide_masters", "manage_slide_transitions",
+                        "list_presentations", "list_available_presentations", "switch_presentation", "get_server_info"
+                    ]
                     for tool_name in known_tools:
                         tools.append({
                             "name": tool_name,
@@ -646,6 +280,19 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             elif method == 'tools/call':
                 tool_name = params.get('name')
                 arguments = params.get('arguments', {})
+                
+                # Use TOOL_REGISTRY (like Word MCP) - simple and reliable
+                if tool_name not in TOOL_REGISTRY:
+                    return {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "error": {
+                            "code": -32601,
+                            "message": f"Tool not found: {tool_name}"
+                        }
+                    }
+                
+                tool_func = TOOL_REGISTRY[tool_name]
                 
                 # Handle file_path parameters - use storage adapter
                 manager = get_presentation_manager()
@@ -724,10 +371,13 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                             # Template not found - will be handled by the tool itself
                             pass
                 
-                # Call the tool via FastMCP's call_tool method
+                # Call the tool directly from TOOL_REGISTRY (like Word MCP)
                 try:
-                    # Use FastMCP's internal tool calling mechanism
-                    result = await app.call_tool(tool_name, arguments)
+                    # Call the function directly
+                    if asyncio.iscoroutinefunction(tool_func):
+                        result = await tool_func(**arguments)
+                    else:
+                        result = tool_func(**arguments)
                     
                     # Track presentation_id to filename mapping
                     if isinstance(result, dict):
@@ -863,179 +513,17 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                         result_text = str(result)
                     
                     enhanced_result = result_text
-                except AttributeError:
-                    # FastMCP might not have call_tool method, try direct access
-                    try:
-                        # Access tool function directly
-                        tool_func = None
-                        if hasattr(app, '_tools') and tool_name in app._tools:
-                            tool_info = app._tools[tool_name]
-                            tool_func = tool_info.get('handler') or tool_info.get('function')
-                        elif hasattr(app, 'tools') and tool_name in app.tools:
-                            tool_info = app.tools[tool_name]
-                            tool_func = tool_info.get('handler') or tool_info.get('function')
-                        
-                        if tool_func is None:
-                            return {
-                                "jsonrpc": "2.0",
-                                "id": request_id,
-                                "error": {
-                                    "code": -32601,
-                                    "message": f"Tool not found: {tool_name}"
-                                }
-                            }
-                        
-                        # Call the tool function
-                        if asyncio.iscoroutinefunction(tool_func):
-                            result = await tool_func(**arguments)
-                        else:
-                            result = tool_func(**arguments)
-                        
-                        # Track presentation_id to filename mapping for auto-save
-                        if isinstance(result, dict):
-                            pres_id = result.get('presentation_id')
-                            if pres_id:
-                                # For open_presentation, create_presentation_from_template, save_presentation
-                                if filename_base:
-                                    _presentation_files[pres_id] = filename_base
-                                # For create_presentation, if file_path was provided, use it
-                                elif 'file_path' in arguments and arguments['file_path']:
-                                    used_path = arguments['file_path']
-                                    if os.path.exists(used_path):
-                                        if original_file_path:
-                                            _presentation_files[pres_id] = os.path.basename(original_file_path)
-                                        else:
-                                            _presentation_files[pres_id] = os.path.basename(used_path)
-                        
-                        # Handle save_presentation - upload to storage
-                        if tool_name == 'save_presentation' and local_path and os.path.exists(local_path):
-                            if original_file_path:
-                                filename_base = os.path.basename(original_file_path)
-                            else:
-                                filename_base = os.path.basename(arguments.get('file_path', ''))
-                            
-                            if filename_base and not filename_base.endswith('.pptx'):
-                                filename_base = f"{filename_base}.pptx"
-                            
-                            if filename_base:
-                                # Save to storage (saves to Render Disk)
-                                pres_url = manager.save_presentation(local_path, filename_base)
-                                download_url = f"{BASE_URL or 'https://office-powerpoint-mcp.onrender.com'}/presentations/{filename_base}"
-                                
-                                # Verify file was saved
-                                storage = get_storage_adapter()
-                                if storage.presentation_exists(filename_base):
-                                    print(f"✓ Verified: Presentation {filename_base} exists in storage")
-                                
-                                # Update mapping and enhance result
-                                if isinstance(result, dict):
-                                    result['download_url'] = download_url
-                                    result['filename'] = filename_base
-                                    result['saved_to_disk'] = True
-                                    if 'presentation_id' in result:
-                                        _presentation_files[result['presentation_id']] = filename_base
-                                    if 'message' in result:
-                                        result['message'] = f"{result['message']}\n\n✓ Saved to Render Disk: {filename_base}\n📥 Download URL: {download_url}"
-                                    else:
-                                        result['message'] = f"✓ Saved to Render Disk: {filename_base}\n📥 Download URL: {download_url}"
-                                elif isinstance(result, str):
-                                    result = f"{result}\n\n✓ Saved to Render Disk: {filename_base}\n📥 Download URL: {download_url}"
-                        
-                        # Auto-save presentations after modifications (for tools that modify presentations)
-                        modification_tools = [
-                            'add_slide', 'manage_text', 'manage_image', 'add_table', 'format_table_cell',
-                            'add_shape', 'add_chart', 'update_chart_data', 'apply_professional_design',
-                            'apply_picture_effects', 'manage_fonts', 'apply_slide_template',
-                            'create_slide_from_template', 'populate_placeholder', 'add_bullet_points',
-                            'manage_hyperlinks', 'add_connector', 'manage_slide_masters',
-                            'manage_slide_transitions', 'optimize_slide_text'
-                        ]
-                        
-                        if tool_name in modification_tools:
-                            # Get presentation_id from arguments or current
-                            pres_id = arguments.get('presentation_id') or current_presentation_id
-                            if pres_id and pres_id in _presentation_files:
-                                # Get the filename for this presentation
-                                auto_save_filename = _presentation_files[pres_id]
-                                if pres_id in presentations:
-                                    # Save the in-memory presentation to a temp file, then upload
-                                    import tempfile
-                                    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.pptx')
-                                    temp_path = temp_file.name
-                                    temp_file.close()
-                                    
-                                    try:
-                                        from utils import presentation_utils as ppt_utils
-                                        ppt_utils.save_presentation(presentations[pres_id], temp_path)
-                                        if os.path.exists(temp_path):
-                                            # Save to storage and get URL (saves to Render Disk)
-                                            pres_url = manager.save_presentation(temp_path, auto_save_filename)
-                                            download_url = f"{BASE_URL or 'https://office-powerpoint-mcp.onrender.com'}/presentations/{auto_save_filename}"
-                                            
-                                            # Verify file was saved
-                                            storage = get_storage_adapter()
-                                            if storage.presentation_exists(auto_save_filename):
-                                                print(f"✓ Verified: Auto-saved presentation {auto_save_filename} exists in storage")
-                                            
-                                            # Enhance result with download URL
-                                            if isinstance(result, dict):
-                                                if 'download_url' not in result:
-                                                    result['download_url'] = download_url
-                                                result['filename'] = auto_save_filename
-                                                result['auto_saved'] = True
-                                                if 'message' in result:
-                                                    result['message'] = f"{result['message']}\n\n✓ Auto-saved to Render Disk: {auto_save_filename}\n📥 Download URL: {download_url}"
-                                                else:
-                                                    result['message'] = f"✓ Auto-saved to Render Disk: {auto_save_filename}\n📥 Download URL: {download_url}"
-                                            
-                                            # Cleanup
-                                            os.unlink(temp_path)
-                                    except Exception as e:
-                                        print(f"Warning: Auto-save failed for {pres_id}: {e}")
-                                        if os.path.exists(temp_path):
-                                            os.unlink(temp_path)
-                        
-                        # Upload presentation back to storage if file_path was used and file exists
-                        if local_path and os.path.exists(local_path) and tool_name != 'save_presentation':
-                            if original_file_path:
-                                filename_base = os.path.basename(original_file_path)
-                            else:
-                                filename_base = os.path.basename(arguments.get('file_path', ''))
-                            
-                            # Ensure .pptx extension
-                            if filename_base and not filename_base.endswith('.pptx'):
-                                filename_base = f"{filename_base}.pptx"
-                            
-                            if filename_base:
-                                # Save to storage
-                                pres_url = manager.save_presentation(local_path, filename_base)
-                                # Enhance result with URL
-                                if isinstance(result, dict):
-                                    result['download_url'] = f"{BASE_URL or 'https://office-powerpoint-mcp.onrender.com'}/presentations/{filename_base}"
-                                    if 'message' in result:
-                                        result['message'] = f"{result['message']}\n\nPresentation saved: {filename_base}\nDownload URL: {result['download_url']}"
-                                elif isinstance(result, str):
-                                    from urllib.parse import quote
-                                    encoded_filename = quote(filename_base)
-                                    download_url = f"{BASE_URL or 'https://office-powerpoint-mcp.onrender.com'}/presentations/{encoded_filename}"
-                                    result = f"{result}\n\nPresentation saved: {filename_base}\nDownload URL: {download_url}"
-                        
-                        # Convert result to string for JSON-RPC response
-                        if isinstance(result, dict):
-                            result_text = json.dumps(result, indent=2)
-                        else:
-                            result_text = str(result)
-                        
-                        enhanced_result = result_text
-                    except Exception as e:
-                        return {
-                            "jsonrpc": "2.0",
-                            "id": request_id,
-                            "error": {
-                                "code": -32603,
-                                "message": f"Error calling tool {tool_name}: {str(e)}"
-                            }
+                except Exception as e:
+                    import traceback
+                    traceback.print_exc()
+                    return {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "error": {
+                            "code": -32603,
+                            "message": f"Error calling tool {tool_name}: {str(e)}"
                         }
+                    }
                 finally:
                     # Cleanup temp files
                     if local_path and os.path.exists(local_path):
