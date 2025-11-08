@@ -4,7 +4,7 @@ Handles template application, template management, automated slide generation,
 and advanced features like dynamic sizing, auto-wrapping, and visual effects.
 """
 from typing import Dict, List, Optional, Any
-from fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP
 import utils.template_utils as template_utils
 
 

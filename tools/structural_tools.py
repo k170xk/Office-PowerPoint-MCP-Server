@@ -3,7 +3,7 @@ Structural element tools for PowerPoint MCP Server.
 Handles tables, shapes, and charts.
 """
 from typing import Dict, List, Optional, Any
-from fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP
 import utils as ppt_utils
 
 
