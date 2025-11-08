@@ -377,23 +377,30 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                             module = tool_modules_map[tool_name]
                             try:
                                 schema = self._get_tool_schema_from_source(module, tool_name, tool_func)
-                                if schema.get('properties'):
+                                if schema and schema.get('properties'):
                                     print(f"  ✓ Extracted schema for {tool_name} from source ({len(schema.get('properties', {}))} params)")
+                                else:
+                                    print(f"  ⚠ AST parsing for {tool_name} returned empty schema")
                             except Exception as e:
-                                print(f"  AST parsing failed for {tool_name}: {e}")
+                                print(f"  ✗ AST parsing failed for {tool_name}: {e}")
+                                import traceback
+                                traceback.print_exc()
                         
                         # Fallback to signature extraction
                         if not schema or not schema.get('properties'):
                             try:
                                 schema = self._get_tool_schema(tool_func)
+                                if schema and schema.get('properties'):
+                                    print(f"  ✓ Extracted schema for {tool_name} from signature ({len(schema.get('properties', {}))} params)")
                             except Exception as e:
-                                print(f"  Signature extraction failed for {tool_name}: {e}")
-                                schema = {"type": "object", "properties": {}}
+                                print(f"  ✗ Signature extraction failed for {tool_name}: {e}")
+                                if not schema:
+                                    schema = {"type": "object", "properties": {}}
                         
                         tools.append({
                             "name": tool_name,
                             "description": tool_func.__doc__ or f"Tool: {tool_name}",
-                            "inputSchema": schema
+                            "inputSchema": schema or {"type": "object", "properties": {}}
                         })
                     
                     # Check how many have schemas
