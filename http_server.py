@@ -225,10 +225,25 @@ def build_tool_registry():
     for attr in possible_attrs:
         if hasattr(app, attr):
             value = getattr(app, attr)
+            print(f"DEBUG build: attr {attr} type={type(value)}", flush=True)
             if isinstance(value, dict) and len(value) > 0:
                 tools_dict = value
                 print(f"DEBUG: Found app.{attr} with {len(tools_dict)} items")
                 break
+            # Some FastMCP versions wrap registry in custom object
+            if not tools_dict and hasattr(value, 'tools'):
+                maybe_tools = getattr(value, 'tools')
+                print(f"DEBUG build: attr {attr}.tools type={type(maybe_tools)}", flush=True)
+                if isinstance(maybe_tools, dict) and len(maybe_tools) > 0:
+                    tools_dict = maybe_tools
+                    print(f"DEBUG: Found app.{attr}.tools with {len(tools_dict)} items")
+                    break
+            if not tools_dict and hasattr(value, '__dict__'):
+                inner = getattr(value, '__dict__')
+                if isinstance(inner, dict) and 'tools' in inner and isinstance(inner['tools'], dict):
+                    tools_dict = inner['tools']
+                    print(f"DEBUG: Found tools inside app.{attr}.__dict__ with {len(tools_dict)} items")
+                    break
     
     # If still not found, search app.__dict__
     if not tools_dict:
