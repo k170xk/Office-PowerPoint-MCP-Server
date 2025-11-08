@@ -76,6 +76,7 @@ def resolve_tool_function(tool_name):
     # 1. Registry (fast path)
     func = TOOL_REGISTRY.get(tool_name)
     if callable(func):
+        print(f"DEBUG resolve: using cached tool {tool_name}", flush=True)
         return func
 
     # 2. Module attribute (functions defined in ppt_mcp_server)
@@ -83,6 +84,7 @@ def resolve_tool_function(tool_name):
         module_func = _unwrap_callable(getattr(ppt_mcp_server, tool_name))
         if callable(module_func):
             TOOL_REGISTRY[tool_name] = module_func
+            print(f"DEBUG resolve: found {tool_name} on ppt_mcp_server module", flush=True)
             return module_func
 
     # 3. FastMCP internal dictionaries
@@ -98,11 +100,13 @@ def resolve_tool_function(tool_name):
                             func = _unwrap_callable(tool_info[key])
                             if callable(func):
                                 TOOL_REGISTRY[tool_name] = func
+                                print(f"DEBUG resolve: found {tool_name} in app.{attr}[{key}]", flush=True)
                                 return func
                 elif callable(tool_info):
                     func = _unwrap_callable(tool_info)
                     if callable(func):
                         TOOL_REGISTRY[tool_name] = func
+                        print(f"DEBUG resolve: found {tool_name} directly in app.{attr}", flush=True)
                         return func
 
     # 4. Search module namespace for additional wrappers
@@ -112,6 +116,7 @@ def resolve_tool_function(tool_name):
             func = _unwrap_callable(attr_value)
             if callable(func):
                 TOOL_REGISTRY[tool_name] = func
+                print(f"DEBUG resolve: found {tool_name} via suffix match on {attr_name}", flush=True)
                 return func
 
     return None
