@@ -792,44 +792,55 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
     def _get_tool_schema_from_source(self, module, func_name, tool_func):
         """Extract schema by parsing the source file directly."""
         try:
-            # Get source file from module (most reliable)
-            source_file = None
-            try:
-                # Try __file__ first (more reliable)
-                if hasattr(module, '__file__') and module.__file__:
-                    source_file = module.__file__
-                    # Handle .pyc files
-                    if source_file.endswith('.pyc'):
-                        source_file = source_file[:-1]  # Remove 'c' to get .py
-                else:
-                    source_file = inspect.getfile(module)
-            except (TypeError, OSError, AttributeError) as e:
-                print(f"Warning: Could not get source file from module {module.__name__}: {e}")
-                return {"type": "object", "properties": {}}
+            # Method 1: Try to get source directly from function object (works for nested functions)
+            source_code = None
+            if tool_func:
+                try:
+                    source_code = inspect.getsource(tool_func)
+                    print(f"✓ Got source for {func_name} via inspect.getsource()")
+                except (OSError, TypeError) as e:
+                    print(f"  inspect.getsource() failed for {func_name}: {e}")
             
-            # Verify file exists - try multiple paths
-            if not os.path.exists(source_file):
-                # Try relative to current directory
-                basename = os.path.basename(source_file)
-                if os.path.exists(basename):
-                    source_file = basename
-                # Try in tools/ directory
-                elif os.path.exists(f"tools/{basename}"):
-                    source_file = f"tools/{basename}"
-                # Try absolute path from __file__
-                elif hasattr(module, '__file__') and module.__file__:
-                    abs_path = os.path.abspath(module.__file__)
-                    if abs_path.endswith('.pyc'):
-                        abs_path = abs_path[:-1]
-                    if os.path.exists(abs_path):
-                        source_file = abs_path
-                else:
-                    print(f"Warning: Source file not found: {source_file} (tried multiple paths)")
+            # Method 2: Fallback to reading from file
+            if not source_code:
+                # Get source file from module (most reliable)
+                source_file = None
+                try:
+                    # Try __file__ first (more reliable)
+                    if hasattr(module, '__file__') and module.__file__:
+                        source_file = module.__file__
+                        # Handle .pyc files
+                        if source_file.endswith('.pyc'):
+                            source_file = source_file[:-1]  # Remove 'c' to get .py
+                    else:
+                        source_file = inspect.getfile(module)
+                except (TypeError, OSError, AttributeError) as e:
+                    print(f"Warning: Could not get source file from module {module.__name__}: {e}")
                     return {"type": "object", "properties": {}}
-            
-            # Read and parse the source file
-            with open(source_file, 'r') as f:
-                source_code = f.read()
+                
+                # Verify file exists - try multiple paths
+                if not os.path.exists(source_file):
+                    # Try relative to current directory
+                    basename = os.path.basename(source_file)
+                    if os.path.exists(basename):
+                        source_file = basename
+                    # Try in tools/ directory
+                    elif os.path.exists(f"tools/{basename}"):
+                        source_file = f"tools/{basename}"
+                    # Try absolute path from __file__
+                    elif hasattr(module, '__file__') and module.__file__:
+                        abs_path = os.path.abspath(module.__file__)
+                        if abs_path.endswith('.pyc'):
+                            abs_path = abs_path[:-1]
+                        if os.path.exists(abs_path):
+                            source_file = abs_path
+                    else:
+                        print(f"Warning: Source file not found: {source_file} (tried multiple paths)")
+                        return {"type": "object", "properties": {}}
+                
+                # Read and parse the source file
+                with open(source_file, 'r') as f:
+                    source_code = f.read()
             
             # Parse AST
             tree = ast.parse(source_code)
