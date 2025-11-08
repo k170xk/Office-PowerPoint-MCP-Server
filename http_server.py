@@ -196,10 +196,11 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                             print(f"FastMCP list_tools failed: {e}")
                     
                     # Also try app._tools or app.tools if available - extract schemas from function objects
+                    # This should work for all tools registered with FastMCP
                     if not tools and (hasattr(app, '_tools') or hasattr(app, 'tools')):
                         tools_dict = getattr(app, '_tools', None) or getattr(app, 'tools', None)
-                        if tools_dict:
-                            print(f"Found tools dict with {len(tools_dict)} tools, extracting schemas from functions...")
+                        if tools_dict and len(tools_dict) > 0:
+                            print(f"✓ Found FastMCP tools dict with {len(tools_dict)} tools, extracting schemas...")
                             # Try to extract schemas from FastMCP's internal storage
                             for tool_name, tool_info in tools_dict.items():
                                 schema = None
@@ -216,34 +217,44 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                                 # If no schema stored, extract from function
                                 if not schema or not schema.get('properties'):
                                     if tool_func:
-                                        # Try to extract schema from function signature
+                                        # Try to extract schema from function signature (with unwrapping)
                                         try:
                                             schema = self._get_tool_schema(tool_func)
-                                            # Also try source parsing
-                                            if not schema.get('properties'):
-                                                # Get module from function
-                                                try:
-                                                    func_module = inspect.getmodule(tool_func)
-                                                    if func_module:
-                                                        schema = self._get_tool_schema_from_source(func_module, tool_name, tool_func)
-                                                except:
-                                                    pass
                                         except Exception as e:
-                                            print(f"Error extracting schema for {tool_name}: {e}")
-                                            schema = {"type": "object", "properties": {}}
+                                            print(f"  Error extracting schema for {tool_name} via signature: {e}")
+                                        
+                                        # If that failed, try source parsing
+                                        if not schema or not schema.get('properties'):
+                                            try:
+                                                func_module = inspect.getmodule(tool_func)
+                                                if func_module:
+                                                    schema = self._get_tool_schema_from_source(func_module, tool_name, tool_func)
+                                                    if schema.get('properties'):
+                                                        print(f"  ✓ Extracted schema for {tool_name} from source ({len(schema.get('properties', {}))} params)")
+                                            except Exception as e:
+                                                print(f"  Error extracting schema for {tool_name} via source: {e}")
                                 
-                                if schema:
-                                    desc = None
-                                    if isinstance(tool_info, dict):
-                                        desc = tool_info.get('description')
-                                    if not desc and tool_func:
-                                        desc = getattr(tool_func, '__doc__', None)
-                                    
-                                    tools.append({
-                                        "name": tool_name,
-                                        "description": desc or f"Tool: {tool_name}",
-                                        "inputSchema": schema if schema else {"type": "object", "properties": {}}
-                                    })
+                                # Use empty schema if still nothing
+                                if not schema or not schema.get('properties'):
+                                    schema = {"type": "object", "properties": {}}
+                                
+                                # Get description
+                                desc = None
+                                if isinstance(tool_info, dict):
+                                    desc = tool_info.get('description')
+                                if not desc and tool_func:
+                                    desc = getattr(tool_func, '__doc__', None)
+                                
+                                tools.append({
+                                    "name": tool_name,
+                                    "description": desc or f"Tool: {tool_name}",
+                                    "inputSchema": schema
+                                })
+                            
+                            if len(tools) > 0:
+                                print(f"✓ Successfully extracted schemas for {len(tools)} tools from FastMCP")
+                                # Don't continue to fallback - we have tools now
+                                # But we still want to ensure all known_tools are included
                     
                     # Also try accessing FastMCP's internal server if available
                     if not tools and hasattr(app, '_server'):
