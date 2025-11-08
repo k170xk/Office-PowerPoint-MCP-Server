@@ -189,9 +189,61 @@ def build_tool_registry():
     
     TOOL_REGISTRY = tools_map
     print(f"Built TOOL_REGISTRY with {len(TOOL_REGISTRY)} tools")
+    
+    # Debug: Print tool names to verify
+    if len(TOOL_REGISTRY) > 0:
+        tool_names = list(TOOL_REGISTRY.keys())[:10]
+        print(f"Sample tools in registry: {', '.join(tool_names)}...")
+    else:
+        print("WARNING: TOOL_REGISTRY is empty after build!")
 
 # Build registry after tools are registered (ppt_mcp_server import registers all tools)
 build_tool_registry()
+
+# Verify critical tools are in registry
+critical_tools = ['get_server_info', 'list_presentations', 'list_available_presentations', 'switch_presentation']
+missing_tools = [t for t in critical_tools if t not in TOOL_REGISTRY]
+if missing_tools:
+    print(f"WARNING: Missing tools in TOOL_REGISTRY: {missing_tools}")
+    print(f"Attempting to add them directly from app...")
+    # Try to add them directly
+    tools_dict = getattr(app, '_tools', None) or getattr(app, 'tools', None)
+    if tools_dict:
+        for tool_name in missing_tools:
+            if tool_name in tools_dict:
+                tool_info = tools_dict[tool_name]
+                if isinstance(tool_info, dict):
+                    tool_func = (tool_info.get('handler') or 
+                                tool_info.get('function') or 
+                                tool_info.get('func') or
+                                tool_info.get('_func'))
+                elif callable(tool_info):
+                    tool_func = tool_info
+                else:
+                    tool_func = None
+                
+                if tool_func:
+                    # Unwrap
+                    original_func = tool_func
+                    for _ in range(10):
+                        if hasattr(tool_func, '__wrapped__'):
+                            tool_func = tool_func.__wrapped__
+                        elif hasattr(tool_func, '_func'):
+                            tool_func = tool_func._func
+                        elif hasattr(tool_func, 'func'):
+                            tool_func = tool_func.func
+                        elif hasattr(tool_func, '__func__'):
+                            tool_func = tool_func.__func__
+                        else:
+                            break
+                    
+                    if not callable(tool_func):
+                        tool_func = original_func
+                    
+                    TOOL_REGISTRY[tool_name] = tool_func
+                    print(f"Added {tool_name} to TOOL_REGISTRY")
+else:
+    print(f"✓ All critical tools are in TOOL_REGISTRY")
 
 # Presentation storage directory
 PRESENTATIONS_DIR = os.getenv('PRESENTATIONS_DIR', './presentations')
