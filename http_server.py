@@ -18,6 +18,9 @@ import importlib.util
 # Add the project root to the path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Emit build identifier for diagnostics
+print("DEBUG server build id: 2025-11-08T18:35", flush=True)
+
 # Import the FastMCP app and necessary components
 # Import the entire module to ensure all tools are registered
 try:
