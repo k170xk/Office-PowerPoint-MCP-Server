@@ -666,6 +666,62 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                         except Exception as e:
                             print(f"FastMCP call_tool failed: {e}", flush=True)
                 
+                # Final fallback: Try to call tool directly from FastMCP
+                if not tool_func:
+                    print(f"DEBUG: Tool {tool_name} not in TOOL_REGISTRY, trying direct FastMCP access", flush=True)
+                    try:
+                        # Try multiple ways to access and call the tool
+                        tools_dict = (getattr(app, '_tools', None) or 
+                                     getattr(app, 'tools', None) or 
+                                     getattr(app, '_tool_registry', None))
+                        
+                        if tools_dict and tool_name in tools_dict:
+                            tool_info = tools_dict[tool_name]
+                            
+                            # Try to get callable handler
+                            handler = None
+                            if isinstance(tool_info, dict):
+                                handler = (tool_info.get('handler') or 
+                                          tool_info.get('function') or 
+                                          tool_info.get('func') or
+                                          tool_info.get('_func'))
+                            elif callable(tool_info):
+                                handler = tool_info
+                            
+                            if handler:
+                                # Unwrap handler if needed
+                                original_handler = handler
+                                for _ in range(10):
+                                    if hasattr(handler, '__wrapped__'):
+                                        handler = handler.__wrapped__
+                                    elif hasattr(handler, '_func'):
+                                        handler = handler._func
+                                    elif hasattr(handler, 'func'):
+                                        handler = handler.func
+                                    else:
+                                        break
+                                
+                                if not callable(handler):
+                                    handler = original_handler
+                                
+                                # Call the handler directly
+                                if callable(handler):
+                                    print(f"DEBUG: Calling {tool_name} directly from FastMCP", flush=True)
+                                    result = handler(**arguments)
+                                    
+                                    # Add to registry for next time
+                                    TOOL_REGISTRY[tool_name] = handler
+                                    
+                                    return {
+                                        "jsonrpc": "2.0",
+                                        "id": request_id,
+                                        "result": result
+                                    }
+                    except Exception as e:
+                        print(f"DEBUG: Direct FastMCP call failed for {tool_name}: {e}", flush=True)
+                        import traceback
+                        traceback.print_exc()
+                
                 if not tool_func:
                     return {
                         "jsonrpc": "2.0",
