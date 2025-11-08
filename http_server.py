@@ -42,7 +42,18 @@ def build_tool_registry():
         if hasattr(app, 'list_tools'):
             try:
                 if asyncio.iscoroutinefunction(app.list_tools):
-                    tools_result = asyncio.run(app.list_tools())
+                    # Try to get existing event loop, or create new one
+                    try:
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            # Can't use asyncio.run() if loop is running, skip this
+                            print("DEBUG: Event loop already running, skipping FastMCP list_tools")
+                            tools_result = None
+                        else:
+                            tools_result = loop.run_until_complete(app.list_tools())
+                    except RuntimeError:
+                        # No event loop, create new one
+                        tools_result = asyncio.run(app.list_tools())
                 else:
                     tools_result = app.list_tools()
                 
@@ -325,6 +336,7 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                     print("Using TOOL_REGISTRY with AST parsing for schema extraction...")
                     tools = []
                     # Map tool names to their source modules (import inside try-except to handle missing modules)
+                    tool_modules_map = {}  # Initialize to empty dict
                     try:
                         from tools import presentation_tools, content_tools, structural_tools, professional_tools
                         from tools import template_tools, hyperlink_tools, chart_tools, connector_tools
@@ -372,7 +384,8 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                         }
                     except ImportError as e:
                         print(f"Warning: Could not import tool modules: {e}")
-                        tool_modules_map = {}
+                    except Exception as e:
+                        print(f"Warning: Error setting up tool_modules_map: {e}")
                     
                     for tool_name, tool_func in TOOL_REGISTRY.items():
                         schema = None
