@@ -403,8 +403,8 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                     # ALWAYS use fallback - extract from source files for ALL tools to ensure schemas
                     # This ensures we get schemas even if FastMCP's tools dict doesn't have them
                     print("Extracting schemas from source files for all tools...")
-                        # Try to get tool functions from the registered modules
-                        try:
+                    # Try to get tool functions from the registered modules
+                    try:
                             # Import tool modules to access functions
                             from tools import presentation_tools, content_tools, structural_tools, professional_tools
                             from tools import template_tools, hyperlink_tools, chart_tools, connector_tools
