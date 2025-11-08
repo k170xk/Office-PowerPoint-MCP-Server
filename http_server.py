@@ -181,11 +181,31 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                             tool_list_result = await app.list_tools()
                             if tool_list_result and 'tools' in tool_list_result:
                                 fastmcp_tools = tool_list_result['tools']
-                                if fastmcp_tools:
-                                    print(f"Found {len(fastmcp_tools)} tools from FastMCP list_tools")
-                                    tools = fastmcp_tools
+                                if fastmcp_tools and len(fastmcp_tools) > 0:
+                                    # Check if schemas are populated
+                                    sample_tool = fastmcp_tools[0]
+                                    if sample_tool.get('inputSchema', {}).get('properties'):
+                                        print(f"✓ Found {len(fastmcp_tools)} tools from FastMCP with schemas")
+                                        tools = fastmcp_tools
+                                    else:
+                                        print(f"Found {len(fastmcp_tools)} tools from FastMCP but schemas are empty, will extract from functions")
                         except Exception as e:
                             print(f"FastMCP list_tools failed: {e}")
+                    
+                    # Also try accessing FastMCP's internal server if available
+                    if not tools and hasattr(app, '_server'):
+                        try:
+                            if hasattr(app._server, 'list_tools'):
+                                server_result = await app._server.list_tools({})
+                                if server_result and 'tools' in server_result:
+                                    fastmcp_tools = server_result['tools']
+                                    if fastmcp_tools and len(fastmcp_tools) > 0:
+                                        sample_tool = fastmcp_tools[0]
+                                        if sample_tool.get('inputSchema', {}).get('properties'):
+                                            print(f"✓ Found {len(fastmcp_tools)} tools from FastMCP _server with schemas")
+                                            tools = fastmcp_tools
+                        except Exception as e:
+                            print(f"FastMCP _server.list_tools failed: {e}")
                     
                     # Method 2: Try _tool_registry (common in FastMCP)
                     if not tools and hasattr(app, '_tool_registry'):
@@ -947,14 +967,36 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
     def _get_tool_schema(self, tool_func):
         """Extract JSON schema from tool function signature."""
         # Unwrap if function is wrapped (e.g., by FastMCP decorator)
-        if hasattr(tool_func, '__wrapped__'):
-            tool_func = tool_func.__wrapped__
-        elif hasattr(tool_func, '_func'):
-            tool_func = tool_func._func
-        elif hasattr(tool_func, 'func'):
-            tool_func = tool_func.func
+        original_func = tool_func
+        unwrap_attempts = 0
+        max_unwrap = 5  # Prevent infinite loops
         
-        sig = inspect.signature(tool_func)
+        while unwrap_attempts < max_unwrap:
+            if hasattr(tool_func, '__wrapped__'):
+                tool_func = tool_func.__wrapped__
+                unwrap_attempts += 1
+            elif hasattr(tool_func, '_func'):
+                tool_func = tool_func._func
+                unwrap_attempts += 1
+            elif hasattr(tool_func, 'func'):
+                tool_func = tool_func.func
+                unwrap_attempts += 1
+            elif hasattr(tool_func, '__func__'):
+                tool_func = tool_func.__func__
+                unwrap_attempts += 1
+            else:
+                break
+        
+        # If we couldn't unwrap, try the original
+        if not callable(tool_func):
+            tool_func = original_func
+        
+        try:
+            sig = inspect.signature(tool_func)
+        except (ValueError, TypeError) as e:
+            print(f"Warning: Could not get signature for function: {e}")
+            # Return empty schema if we can't get signature
+            return {"type": "object", "properties": {}}
         
         properties = {}
         required = []
