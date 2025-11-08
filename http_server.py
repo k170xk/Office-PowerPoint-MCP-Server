@@ -279,8 +279,36 @@ def build_tool_registry():
     if not tools_dict or len(tools_dict) == 0:
         interesting = [a for a in dir(app) if 'tool' in a.lower()]
         print(f"DEBUG build: no tools dict found. tool-related attrs={interesting}", flush=True)
-        print("Warning: FastMCP tools dict not found or empty")
-        return
+
+        # Inspect _tool_manager which appears in FastMCP 1.21+
+        manager = getattr(app, '_tool_manager', None)
+        if manager is not None:
+            print(f"DEBUG build: app._tool_manager type={type(manager)}", flush=True)
+            manager_attrs = [a for a in dir(manager) if 'tool' in a.lower()]
+            print(f"DEBUG build: _tool_manager tool-related attrs={manager_attrs}", flush=True)
+            possible_containers = []
+            for name in ['tools', '_tools', 'registry', '_registry']:
+                if hasattr(manager, name):
+                    container = getattr(manager, name)
+                    possible_containers.append((name, container))
+            for name, container in possible_containers:
+                print(f"DEBUG build: _tool_manager.{name} type={type(container)}", flush=True)
+                if isinstance(container, dict) and len(container) > 0:
+                    tools_dict = container
+                    print(f"DEBUG: Found tools via _tool_manager.{name} with {len(tools_dict)} items")
+                    break
+            if not tools_dict and hasattr(manager, '__dict__'):
+                inner = manager.__dict__
+                if isinstance(inner, dict):
+                    for key, value in inner.items():
+                        if isinstance(value, dict) and len(value) > 0:
+                            print(f"DEBUG build: _tool_manager.__dict__[{key}] type={type(value)} len={len(value)}", flush=True)
+                            tools_dict = value
+                            break
+        
+        if not tools_dict:
+            print("Warning: FastMCP tools dict not found or empty")
+            return
     
     # Extract unwrapped function objects
     tools_map = {}
