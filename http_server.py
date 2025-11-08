@@ -175,22 +175,40 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                 
                 # FastMCP stores tools internally - try multiple ways to access them
                 try:
-                    # Method 1: Try _tool_registry (common in FastMCP)
-                    if hasattr(app, '_tool_registry'):
+                    # Method 1: Try to get tools via FastMCP's list_tools method (if available)
+                    if hasattr(app, 'list_tools'):
+                        try:
+                            tool_list_result = await app.list_tools()
+                            if tool_list_result and 'tools' in tool_list_result:
+                                fastmcp_tools = tool_list_result['tools']
+                                if fastmcp_tools:
+                                    print(f"Found {len(fastmcp_tools)} tools from FastMCP list_tools")
+                                    tools = fastmcp_tools
+                        except Exception as e:
+                            print(f"FastMCP list_tools failed: {e}")
+                    
+                    # Method 2: Try _tool_registry (common in FastMCP)
+                    if not tools and hasattr(app, '_tool_registry'):
+                        print("Trying _tool_registry...")
                         for tool_name, tool_info in app._tool_registry.items():
-                            tool_func = tool_info if callable(tool_info) else (tool_info.get('handler') if isinstance(tool_info, dict) else None)
-                            if tool_func:
-                                schema = self._get_tool_schema(tool_func)
+                            # FastMCP might store schema directly
+                            if isinstance(tool_info, dict) and 'inputSchema' in tool_info:
+                                schema = tool_info.get('inputSchema', {})
                             else:
-                                schema = tool_info.get('inputSchema', {}) if isinstance(tool_info, dict) else {}
+                                tool_func = tool_info if callable(tool_info) else (tool_info.get('handler') if isinstance(tool_info, dict) else None)
+                                if tool_func:
+                                    schema = self._get_tool_schema(tool_func)
+                                else:
+                                    schema = tool_info.get('inputSchema', {}) if isinstance(tool_info, dict) else {}
                             desc = tool_info.get('description', f"Tool: {tool_name}") if isinstance(tool_info, dict) else (getattr(tool_info, '__doc__', None) or f"Tool: {tool_name}")
                             tools.append({
                                 "name": tool_name,
                                 "description": desc,
                                 "inputSchema": schema if schema else {"type": "object", "properties": {}}
                             })
-                    # Method 2: Try _tools attribute
-                    elif hasattr(app, '_tools'):
+                    # Method 3: Try _tools attribute
+                    if not tools and hasattr(app, '_tools'):
+                        print("Trying _tools attribute...")
                         for tool_name, tool_info in app._tools.items():
                             if isinstance(tool_info, dict):
                                 tool_func = tool_info.get('handler') or tool_info.get('function')
