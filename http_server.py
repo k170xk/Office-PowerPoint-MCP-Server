@@ -35,11 +35,69 @@ def build_tool_registry():
     """Build a registry of all available tools by extracting unwrapped functions from FastMCP."""
     global TOOL_REGISTRY
     
-    # Debug: Check what attributes app has
-    print(f"DEBUG: app type: {type(app)}")
-    print(f"DEBUG: app attributes with 'tool': {[attr for attr in dir(app) if 'tool' in attr.lower()]}")
+    # Try to use FastMCP's list_tools method first (it might have better schema extraction)
+    try:
+        import asyncio
+        # FastMCP's list_tools might be async
+        if hasattr(app, 'list_tools'):
+            try:
+                if asyncio.iscoroutinefunction(app.list_tools):
+                    tools_result = asyncio.run(app.list_tools())
+                else:
+                    tools_result = app.list_tools()
+                
+                if tools_result and 'tools' in tools_result:
+                    fastmcp_tools = tools_result['tools']
+                    # Check if schemas are populated
+                    if fastmcp_tools and len(fastmcp_tools) > 0:
+                        sample = fastmcp_tools[0]
+                        if sample.get('inputSchema', {}).get('properties'):
+                            print(f"✓ FastMCP list_tools provided {len(fastmcp_tools)} tools with schemas")
+                            # Build registry from FastMCP's tool list
+                            tools_map = {}
+                            # We still need the actual functions for calling, so get them from app._tools
+                            tools_dict = getattr(app, '_tools', None) or getattr(app, 'tools', None)
+                            if tools_dict:
+                                for tool_name, tool_info in tools_dict.items():
+                                    tool_func = None
+                                    if isinstance(tool_info, dict):
+                                        tool_func = (tool_info.get('handler') or 
+                                                    tool_info.get('function') or 
+                                                    tool_info.get('func') or
+                                                    tool_info.get('_func'))
+                                    elif callable(tool_info):
+                                        tool_func = tool_info
+                                    
+                                    if tool_func:
+                                        # Unwrap function
+                                        original_func = tool_func
+                                        for _ in range(5):
+                                            if hasattr(tool_func, '__wrapped__'):
+                                                tool_func = tool_func.__wrapped__
+                                            elif hasattr(tool_func, '_func'):
+                                                tool_func = tool_func._func
+                                            elif hasattr(tool_func, 'func'):
+                                                tool_func = tool_func.func
+                                            elif hasattr(tool_func, '__func__'):
+                                                tool_func = tool_func.__func__
+                                            else:
+                                                break
+                                        
+                                        if not callable(tool_func):
+                                            tool_func = original_func
+                                        
+                                        tools_map[tool_name] = tool_func
+                            
+                            TOOL_REGISTRY = tools_map
+                            print(f"Built TOOL_REGISTRY with {len(TOOL_REGISTRY)} tools from FastMCP")
+                            # Store the schemas for later use
+                            return
+            except Exception as e:
+                print(f"DEBUG: FastMCP list_tools failed: {e}")
+    except Exception as e:
+        print(f"DEBUG: Error trying FastMCP list_tools: {e}")
     
-    # Access FastMCP's tools dict - try multiple ways
+    # Fallback: Access FastMCP's tools dict directly
     tools_dict = None
     if hasattr(app, '_tools'):
         tools_dict = app._tools
@@ -61,20 +119,7 @@ def build_tool_registry():
     
     if not tools_dict or len(tools_dict) == 0:
         print("Warning: FastMCP tools dict not found or empty")
-        # Try to inspect app structure
-        if hasattr(app, '__dict__'):
-            print(f"DEBUG: app.__dict__ keys: {list(app.__dict__.keys())[:20]}")
         return
-    
-    # Debug: Check structure of first tool
-    if tools_dict:
-        first_tool_name = list(tools_dict.keys())[0]
-        first_tool_info = tools_dict[first_tool_name]
-        print(f"DEBUG: First tool '{first_tool_name}' type: {type(first_tool_info)}")
-        if isinstance(first_tool_info, dict):
-            print(f"DEBUG: First tool dict keys: {list(first_tool_info.keys())}")
-        elif callable(first_tool_info):
-            print(f"DEBUG: First tool is callable, attributes: {[attr for attr in dir(first_tool_info) if not attr.startswith('__')][:10]}")
     
     # Extract unwrapped function objects
     tools_map = {}
@@ -116,15 +161,6 @@ def build_tool_registry():
             # If we couldn't unwrap, use the original
             if not callable(tool_func):
                 tool_func = original_func
-            
-            # Test if we can get signature
-            try:
-                import inspect
-                sig = inspect.signature(tool_func)
-                params = list(sig.parameters.keys())
-                print(f"DEBUG: Tool '{tool_name}' has {len(params)} parameters: {params[:5]}")
-            except Exception as e:
-                print(f"DEBUG: Tool '{tool_name}' signature extraction failed: {e}")
             
             tools_map[tool_name] = tool_func
     
