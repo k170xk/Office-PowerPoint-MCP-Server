@@ -299,7 +299,25 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                                     try:
                                         tool_func = getattr(module, func_name, None)
                                         if tool_func and callable(tool_func):
-                                            schema = self._get_tool_schema(tool_func)
+                                            try:
+                                                schema = self._get_tool_schema(tool_func)
+                                                # Verify schema has properties
+                                                if not schema.get('properties'):
+                                                    print(f"Warning: Empty schema for {tool_name}, checking function signature...")
+                                                    # Try to get signature directly
+                                                    if hasattr(tool_func, '__wrapped__'):
+                                                        unwrapped = tool_func.__wrapped__
+                                                        sig = inspect.signature(unwrapped)
+                                                        print(f"  {tool_name} signature: {sig}")
+                                                    else:
+                                                        sig = inspect.signature(tool_func)
+                                                        print(f"  {tool_name} signature: {sig}")
+                                            except Exception as schema_error:
+                                                print(f"Error extracting schema for {tool_name}: {schema_error}")
+                                                import traceback
+                                                traceback.print_exc()
+                                                schema = {"type": "object", "properties": {}}
+                                            
                                             desc = getattr(tool_func, '__doc__', None) or f"Tool: {tool_name}"
                                             tools.append({
                                                 "name": tool_name,
@@ -309,6 +327,8 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                                             continue
                                     except Exception as e:
                                         print(f"Error extracting schema for {tool_name}: {e}")
+                                        import traceback
+                                        traceback.print_exc()
                                 
                                 # Fallback if function not found
                                 tools.append({
@@ -908,6 +928,14 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
     
     def _get_tool_schema(self, tool_func):
         """Extract JSON schema from tool function signature."""
+        # Unwrap if function is wrapped (e.g., by FastMCP decorator)
+        if hasattr(tool_func, '__wrapped__'):
+            tool_func = tool_func.__wrapped__
+        elif hasattr(tool_func, '_func'):
+            tool_func = tool_func._func
+        elif hasattr(tool_func, 'func'):
+            tool_func = tool_func.func
+        
         sig = inspect.signature(tool_func)
         
         properties = {}
