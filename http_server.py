@@ -94,6 +94,7 @@ def resolve_tool_function(tool_name):
             value = getattr(app, attr)
             if isinstance(value, dict) and tool_name in value:
                 tool_info = value[tool_name]
+                print(f"DEBUG resolve: app.{attr}[{tool_name}] type={type(tool_info)}", flush=True)
                 if isinstance(tool_info, dict):
                     for key in ['handler', 'function', 'func', '_func', 'callable']:
                         if key in tool_info and callable(tool_info[key]):
@@ -108,6 +109,21 @@ def resolve_tool_function(tool_name):
                         TOOL_REGISTRY[tool_name] = func
                         print(f"DEBUG resolve: found {tool_name} directly in app.{attr}", flush=True)
                         return func
+                else:
+                    # Inspect for common attribute storage (FastMCP ToolRegistration)
+                    possible = []
+                    for key in ['handler', 'function', 'func', '_func', 'callable', '__call__']:
+                        candidate = getattr(tool_info, key, None)
+                        if candidate:
+                            possible.append((key, candidate))
+                    for key, candidate in possible:
+                        if callable(candidate):
+                            func = _unwrap_callable(candidate)
+                            if callable(func):
+                                TOOL_REGISTRY[tool_name] = func
+                                print(f"DEBUG resolve: found {tool_name} via attribute {key} on {type(tool_info)}", flush=True)
+                                return func
+                    print(f"DEBUG resolve: no callable extracted from {type(tool_info)}", flush=True)
 
     # 4. Search module namespace for additional wrappers
     module_dict = vars(ppt_mcp_server)
