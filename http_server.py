@@ -116,6 +116,8 @@ def resolve_tool_function(tool_name):
                 else:
                     # Inspect for common attribute storage (FastMCP ToolRegistration)
                     possible = []
+                    attr_list = [k for k in dir(tool_info) if not k.startswith('__')]
+                    print(f"DEBUG resolve: tool_info({tool_name}) type={type(tool_info)} attrs={attr_list}", flush=True)
                     for key in ['handler', 'function', 'func', '_func', 'callable', '__call__']:
                         candidate = getattr(tool_info, key, None)
                         if candidate:
