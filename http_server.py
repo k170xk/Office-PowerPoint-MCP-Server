@@ -280,6 +280,7 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                             
                             # Also check ppt_mcp_server for additional tools
                             tool_modules['list_presentations'] = (ppt_mcp_server, 'list_presentations')
+                            tool_modules['list_available_presentations'] = (ppt_mcp_server, 'list_available_presentations')
                             tool_modules['switch_presentation'] = (ppt_mcp_server, 'switch_presentation')
                             tool_modules['get_server_info'] = (ppt_mcp_server, 'get_server_info')
                             
