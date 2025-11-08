@@ -190,9 +190,28 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                                         print(f"✓ Found {len(fastmcp_tools)} tools from FastMCP with schemas")
                                         tools = fastmcp_tools
                                     else:
-                                        print(f"Found {len(fastmcp_tools)} tools from FastMCP but schemas are empty, will extract from functions")
+                                        print(f"Found {len(fastmcp_tools)} tools from FastMCP but schemas are empty")
+                                        # Don't use these - will extract from functions instead
                         except Exception as e:
                             print(f"FastMCP list_tools failed: {e}")
+                    
+                    # Also try app._tools or app.tools if available
+                    if not tools and (hasattr(app, '_tools') or hasattr(app, 'tools')):
+                        tools_dict = getattr(app, '_tools', None) or getattr(app, 'tools', None)
+                        if tools_dict:
+                            print(f"Found tools dict with {len(tools_dict)} tools")
+                            # Try to extract schemas from FastMCP's internal storage
+                            for tool_name, tool_info in tools_dict.items():
+                                if isinstance(tool_info, dict):
+                                    # FastMCP might store schema in tool_info
+                                    schema = tool_info.get('inputSchema') or tool_info.get('schema')
+                                    if schema and schema.get('properties'):
+                                        tools.append({
+                                            "name": tool_name,
+                                            "description": tool_info.get('description', f"Tool: {tool_name}"),
+                                            "inputSchema": schema
+                                        })
+                                        continue
                     
                     # Also try accessing FastMCP's internal server if available
                     if not tools and hasattr(app, '_server'):
