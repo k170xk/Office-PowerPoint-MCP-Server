@@ -388,30 +388,44 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                                 if tool_name in tool_modules:
                                     module, func_name = tool_modules[tool_name]
                                     try:
-                                        # Try to get function, but it might be None if nested
-                                        tool_func = getattr(module, func_name, None)
-                                        
-                                        # Always try to extract schema from source file (works even if function is nested)
+                                        # Always try to extract schema from source file first (works even if function is nested)
+                                        schema = None
                                         try:
-                                            schema = self._get_tool_schema_from_source(module, func_name, tool_func)
-                                            
-                                            # If that failed and we have a function, try direct signature extraction
-                                            if not schema.get('properties') and tool_func and callable(tool_func):
-                                                schema = self._get_tool_schema(tool_func)
-                                            
-                                            # If still empty, log it
-                                            if not schema.get('properties'):
-                                                print(f"Warning: Could not extract schema for {tool_name} from {inspect.getfile(module)}")
-                                        except Exception as schema_error:
-                                            print(f"Error extracting schema for {tool_name}: {schema_error}")
-                                            import traceback
-                                            traceback.print_exc()
+                                            schema = self._get_tool_schema_from_source(module, func_name, None)
+                                        except Exception as e:
+                                            print(f"Source parsing failed for {tool_name}: {e}")
+                                        
+                                        # If that failed, try to get function and extract from it
+                                        if not schema or not schema.get('properties'):
+                                            tool_func = getattr(module, func_name, None)
+                                            if tool_func and callable(tool_func):
+                                                try:
+                                                    schema = self._get_tool_schema(tool_func)
+                                                except:
+                                                    pass
+                                        
+                                        # If still empty, use empty schema but log it
+                                        if not schema or not schema.get('properties'):
+                                            print(f"Warning: Could not extract schema for {tool_name} from {inspect.getfile(module) if hasattr(module, '__file__') else 'unknown'}")
                                             schema = {"type": "object", "properties": {}}
                                         
-                                        # Get description from function or use default
+                                        # Get description - try from FastMCP tools dict first
                                         desc = f"Tool: {tool_name}"
-                                        if tool_func and callable(tool_func):
-                                            desc = getattr(tool_func, '__doc__', None) or desc
+                                        # Try to get from FastMCP's tools dict
+                                        if hasattr(app, '_tools') or hasattr(app, 'tools'):
+                                            tools_dict = getattr(app, '_tools', None) or getattr(app, 'tools', None)
+                                            if tools_dict and tool_name in tools_dict:
+                                                tool_info = tools_dict[tool_name]
+                                                if isinstance(tool_info, dict):
+                                                    desc = tool_info.get('description', desc)
+                                                elif callable(tool_info):
+                                                    desc = getattr(tool_info, '__doc__', None) or desc
+                                        
+                                        # Fallback to getting from module function
+                                        if desc == f"Tool: {tool_name}":
+                                            tool_func = getattr(module, func_name, None)
+                                            if tool_func and callable(tool_func):
+                                                desc = getattr(tool_func, '__doc__', None) or desc
                                         
                                         tools.append({
                                             "name": tool_name,
