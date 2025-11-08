@@ -92,6 +92,7 @@ def resolve_tool_function(tool_name):
     for attr in possible_attrs:
         if hasattr(app, attr):
             value = getattr(app, attr)
+            print(f"DEBUG resolve: app.{attr}[{tool_name}] type={type(value)}", flush=True)
             if isinstance(value, dict) and tool_name in value:
                 tool_info = value[tool_name]
                 print(f"DEBUG resolve: app.{attr}[{tool_name}] type={type(tool_info)}", flush=True)
@@ -223,27 +224,30 @@ def build_tool_registry():
     possible_attrs = ['_tools', 'tools', '_tool_registry', 'tool_registry', '_handlers', 'handlers']
     
     for attr in possible_attrs:
-        if hasattr(app, attr):
-            value = getattr(app, attr)
-            print(f"DEBUG build: attr {attr} type={type(value)}", flush=True)
-            if isinstance(value, dict) and len(value) > 0:
-                tools_dict = value
-                print(f"DEBUG: Found app.{attr} with {len(tools_dict)} items")
+        has_attr = hasattr(app, attr)
+        print(f"DEBUG build: hasattr(app, '{attr}')={has_attr}", flush=True)
+        if not has_attr:
+            continue
+        value = getattr(app, attr)
+        print(f"DEBUG build: attr {attr} type={type(value)}", flush=True)
+        if isinstance(value, dict) and len(value) > 0:
+            tools_dict = value
+            print(f"DEBUG: Found app.{attr} with {len(tools_dict)} items")
+            break
+        # Some FastMCP versions wrap registry in custom object
+        if not tools_dict and hasattr(value, 'tools'):
+            maybe_tools = getattr(value, 'tools')
+            print(f"DEBUG build: attr {attr}.tools type={type(maybe_tools)}", flush=True)
+            if isinstance(maybe_tools, dict) and len(maybe_tools) > 0:
+                tools_dict = maybe_tools
+                print(f"DEBUG: Found app.{attr}.tools with {len(tools_dict)} items")
                 break
-            # Some FastMCP versions wrap registry in custom object
-            if not tools_dict and hasattr(value, 'tools'):
-                maybe_tools = getattr(value, 'tools')
-                print(f"DEBUG build: attr {attr}.tools type={type(maybe_tools)}", flush=True)
-                if isinstance(maybe_tools, dict) and len(maybe_tools) > 0:
-                    tools_dict = maybe_tools
-                    print(f"DEBUG: Found app.{attr}.tools with {len(tools_dict)} items")
-                    break
-            if not tools_dict and hasattr(value, '__dict__'):
-                inner = getattr(value, '__dict__')
-                if isinstance(inner, dict) and 'tools' in inner and isinstance(inner['tools'], dict):
-                    tools_dict = inner['tools']
-                    print(f"DEBUG: Found tools inside app.{attr}.__dict__ with {len(tools_dict)} items")
-                    break
+        if not tools_dict and hasattr(value, '__dict__'):
+            inner = getattr(value, '__dict__')
+            if isinstance(inner, dict) and 'tools' in inner and isinstance(inner['tools'], dict):
+                tools_dict = inner['tools']
+                print(f"DEBUG: Found tools inside app.{attr}.__dict__ with {len(tools_dict)} items")
+                break
     
     # If still not found, search app.__dict__
     if not tools_dict:
@@ -270,6 +274,8 @@ def build_tool_registry():
                             break
     
     if not tools_dict or len(tools_dict) == 0:
+        interesting = [a for a in dir(app) if 'tool' in a.lower()]
+        print(f"DEBUG build: no tools dict found. tool-related attrs={interesting}", flush=True)
         print("Warning: FastMCP tools dict not found or empty")
         return
     
