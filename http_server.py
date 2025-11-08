@@ -400,9 +400,9 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                         except:
                             pass
                     
-                    # If still no tools, use fallback - try to get functions from ppt_mcp_server module
-                    if not tools:
-                        print("Warning: Could not access FastMCP tools, trying to extract from module")
+                    # ALWAYS use fallback - extract from source files for ALL tools to ensure schemas
+                    # This ensures we get schemas even if FastMCP's tools dict doesn't have them
+                    print("Extracting schemas from source files for all tools...")
                         # Try to get tool functions from the registered modules
                         try:
                             # Import tool modules to access functions
