@@ -601,18 +601,16 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                 # Use TOOL_REGISTRY (like Word MCP) - simple and reliable
                 tool_func = None
                 
+                # First, try to rebuild TOOL_REGISTRY if it's empty
+                if len(TOOL_REGISTRY) == 0:
+                    print(f"Warning: TOOL_REGISTRY is empty, rebuilding...", flush=True)
+                    build_tool_registry()
+                
                 if tool_name in TOOL_REGISTRY:
                     tool_func = TOOL_REGISTRY[tool_name]
-                else:
-                    # Try to rebuild TOOL_REGISTRY in case it's empty
-                    if len(TOOL_REGISTRY) == 0:
-                        print(f"Warning: TOOL_REGISTRY is empty, rebuilding...", flush=True)
-                        build_tool_registry()
-                        if tool_name in TOOL_REGISTRY:
-                            tool_func = TOOL_REGISTRY[tool_name]
-                    
-                    # If still not found, try to get from app directly
-                    if not tool_func:
+                
+                # If still not found, try to get from app directly
+                if not tool_func:
                         tools_dict = getattr(app, '_tools', None) or getattr(app, 'tools', None) or getattr(app, '_tool_registry', None)
                         if tools_dict and tool_name in tools_dict:
                             tool_info = tools_dict[tool_name]
