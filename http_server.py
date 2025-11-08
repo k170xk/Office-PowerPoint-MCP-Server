@@ -1116,19 +1116,38 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         """Extract schema by parsing the source file directly."""
         try:
             # Get source file from module (most reliable)
+            source_file = None
             try:
-                source_file = inspect.getfile(module)
-            except (TypeError, OSError) as e:
-                print(f"Warning: Could not get source file from module: {e}")
+                # Try __file__ first (more reliable)
+                if hasattr(module, '__file__') and module.__file__:
+                    source_file = module.__file__
+                    # Handle .pyc files
+                    if source_file.endswith('.pyc'):
+                        source_file = source_file[:-1]  # Remove 'c' to get .py
+                else:
+                    source_file = inspect.getfile(module)
+            except (TypeError, OSError, AttributeError) as e:
+                print(f"Warning: Could not get source file from module {module.__name__}: {e}")
                 return {"type": "object", "properties": {}}
             
-            # Verify file exists
+            # Verify file exists - try multiple paths
             if not os.path.exists(source_file):
-                print(f"Warning: Source file not found: {source_file}")
-                # Try relative path
-                if os.path.exists(os.path.basename(source_file)):
-                    source_file = os.path.basename(source_file)
+                # Try relative to current directory
+                basename = os.path.basename(source_file)
+                if os.path.exists(basename):
+                    source_file = basename
+                # Try in tools/ directory
+                elif os.path.exists(f"tools/{basename}"):
+                    source_file = f"tools/{basename}"
+                # Try absolute path from __file__
+                elif hasattr(module, '__file__') and module.__file__:
+                    abs_path = os.path.abspath(module.__file__)
+                    if abs_path.endswith('.pyc'):
+                        abs_path = abs_path[:-1]
+                    if os.path.exists(abs_path):
+                        source_file = abs_path
                 else:
+                    print(f"Warning: Source file not found: {source_file} (tried multiple paths)")
                     return {"type": "object", "properties": {}}
             
             # Read and parse the source file
