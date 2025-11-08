@@ -430,42 +430,53 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                     except Exception as e:
                         print(f"Warning: Error setting up tool_modules_map: {e}")
                     
+                    print(f"TOOL_REGISTRY has {len(TOOL_REGISTRY)} tools")
+                    print(f"tool_modules_map has {len(tool_modules_map)} mappings")
+                    
                     for tool_name, tool_func in TOOL_REGISTRY.items():
                         schema = None
-                        # Try AST parsing first (works for nested functions)
-                        if tool_name in tool_modules_map:
-                            module = tool_modules_map[tool_name]
-                            try:
-                                schema = self._get_tool_schema_from_source(module, tool_name, tool_func)
-                                if schema and schema.get('properties'):
-                                    print(f"  ✓ Extracted schema for {tool_name} from source ({len(schema.get('properties', {}))} params)")
-                                else:
-                                    print(f"  ⚠ AST parsing for {tool_name} returned empty schema")
-                            except Exception as e:
-                                print(f"  ✗ AST parsing failed for {tool_name}: {e}")
-                                import traceback
-                                traceback.print_exc()
+                        # Try signature extraction first (more reliable than AST for wrapped functions)
+                        try:
+                            schema = self._get_tool_schema(tool_func)
+                            if schema and schema.get('properties'):
+                                print(f"  ✓ Extracted schema for {tool_name} from signature ({len(schema.get('properties', {}))} params)", flush=True)
+                            else:
+                                print(f"  ⚠ Signature extraction for {tool_name} returned empty schema", flush=True)
+                        except Exception as e:
+                            print(f"  ✗ Signature extraction failed for {tool_name}: {e}", flush=True)
+                            import traceback
+                            traceback.print_exc()
                         
-                        # Fallback to signature extraction
+                        # Fallback to AST parsing (works for nested functions)
                         if not schema or not schema.get('properties'):
-                            try:
-                                schema = self._get_tool_schema(tool_func)
-                                if schema and schema.get('properties'):
-                                    print(f"  ✓ Extracted schema for {tool_name} from signature ({len(schema.get('properties', {}))} params)")
-                            except Exception as e:
-                                print(f"  ✗ Signature extraction failed for {tool_name}: {e}")
-                                if not schema:
-                                    schema = {"type": "object", "properties": {}}
+                            if tool_name in tool_modules_map:
+                                module = tool_modules_map[tool_name]
+                                try:
+                                    schema = self._get_tool_schema_from_source(module, tool_name, tool_func)
+                                    if schema and schema.get('properties'):
+                                        print(f"  ✓ Extracted schema for {tool_name} from source ({len(schema.get('properties', {}))} params)", flush=True)
+                                    else:
+                                        print(f"  ⚠ AST parsing for {tool_name} returned empty schema", flush=True)
+                                except Exception as e:
+                                    print(f"  ✗ AST parsing failed for {tool_name}: {e}", flush=True)
+                                    import traceback
+                                    traceback.print_exc()
+                        
+                        # Final fallback: empty schema
+                        if not schema or not schema.get('properties'):
+                            schema = {"type": "object", "properties": {}}
+                            print(f"  ⚠ No schema extracted for {tool_name}, using empty schema", flush=True)
                         
                         tools.append({
                             "name": tool_name,
                             "description": tool_func.__doc__ or f"Tool: {tool_name}",
-                            "inputSchema": schema or {"type": "object", "properties": {}}
+                            "inputSchema": schema
                         })
                     
                     # Check how many have schemas
                     schemas_count = sum(1 for t in tools if t.get('inputSchema', {}).get('properties'))
-                    print(f"TOOL_REGISTRY: {schemas_count}/{len(tools)} tools have schemas")
+                    print(f"TOOL_REGISTRY: {schemas_count}/{len(tools)} tools have schemas", flush=True)
+                    sys.stdout.flush()
                 
                 # Final fallback: if still empty, return known tools with empty schemas
                 if not tools:
@@ -1081,10 +1092,14 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
     
     def _get_tool_schema(self, tool_func):
         """Extract JSON schema from tool function signature."""
+        if not callable(tool_func):
+            print(f"  ERROR: tool_func is not callable: {type(tool_func)}", flush=True)
+            return {"type": "object", "properties": {}}
+        
         # Unwrap if function is wrapped (e.g., by FastMCP decorator)
         original_func = tool_func
         unwrap_attempts = 0
-        max_unwrap = 5  # Prevent infinite loops
+        max_unwrap = 10  # Increased to handle more wrapping layers
         
         while unwrap_attempts < max_unwrap:
             if hasattr(tool_func, '__wrapped__'):
@@ -1110,7 +1125,9 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         sig = None
         try:
             sig = inspect.signature(tool_func)
+            print(f"  DEBUG: Got signature for function: {len(sig.parameters)} parameters", flush=True)
         except (ValueError, TypeError) as e:
+            print(f"  DEBUG: inspect.signature() failed: {e}", flush=True)
             # If signature extraction fails, try to get it from source code
             try:
                 source = inspect.getsource(tool_func)
@@ -1192,18 +1209,45 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             param_type = param.annotation
             param_default = param.default
             
-            # Handle Optional types
-            if hasattr(typing, 'get_origin') and typing.get_origin(param_type) is typing.Union:
-                args = typing.get_args(param_type)
-                # If Union includes None, it's Optional
-                if type(None) in args:
-                    # Get the actual type (not None)
-                    param_type = next((arg for arg in args if arg is not type(None)), str)
+            # Handle Optional types and Union types
+            if param_type != inspect.Parameter.empty:
+                # Check if it's a Union type (Optional is Union[T, None])
+                if hasattr(typing, 'get_origin'):
+                    origin = typing.get_origin(param_type)
+                    if origin is typing.Union:
+                        args = typing.get_args(param_type)
+                        # If Union includes None, it's Optional - get the actual type
+                        non_none_args = [arg for arg in args if arg is not type(None)]
+                        if non_none_args:
+                            param_type = non_none_args[0]
+                    elif origin is list:
+                        # Handle List[T] types
+                        args = typing.get_args(param_type)
+                        if args:
+                            param_type = list  # We'll handle the item type separately
+                # Also check for string representation (for older Python versions)
+                elif isinstance(param_type, str):
+                    if 'Optional' in str(param_type) or 'Union' in str(param_type):
+                        # Try to extract the base type
+                        if 'int' in str(param_type):
+                            param_type = int
+                        elif 'float' in str(param_type):
+                            param_type = float
+                        elif 'bool' in str(param_type):
+                            param_type = bool
+                        elif 'list' in str(param_type) or 'List' in str(param_type):
+                            param_type = list
+                        elif 'dict' in str(param_type) or 'Dict' in str(param_type):
+                            param_type = dict
+                        else:
+                            param_type = str
             
             # Map Python types to JSON schema types
             prop_schema = {}
             
-            if param_type == str or param_type == inspect.Parameter.empty or param_type == type(None):
+            if param_type == inspect.Parameter.empty or param_type == type(None):
+                prop_schema["type"] = "string"
+            elif param_type == str:
                 prop_schema["type"] = "string"
             elif param_type == int:
                 prop_schema["type"] = "integer"
@@ -1217,7 +1261,9 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             elif param_type == dict:
                 prop_schema["type"] = "object"
             else:
+                # Default to string for unknown types
                 prop_schema["type"] = "string"
+                print(f"    DEBUG: Unknown param type {param_type} for {param_name}, defaulting to string", flush=True)
             
             # Try to extract description from docstring
             desc = f"Parameter: {param_name}"
