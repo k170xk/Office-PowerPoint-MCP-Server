@@ -23,6 +23,9 @@ from ppt_mcp_server import app, presentations, current_presentation_id
 from presentation_manager import get_presentation_manager
 from storage_adapter import get_storage_adapter
 
+# Track presentation_id to filename mapping for auto-save
+_presentation_files = {}  # Maps presentation_id to filename
+
 # Presentation storage directory
 PRESENTATIONS_DIR = os.getenv('PRESENTATIONS_DIR', './presentations')
 BASE_URL = os.getenv('BASE_URL', '')  # Will be set from Render service URL
@@ -422,7 +425,9 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                 
                 original_file_path = None
                 local_path = None
+                filename_base = None
                 
+                # Handle file_path parameter (for open_presentation, save_presentation, create_presentation_from_template)
                 if 'file_path' in arguments:
                     original_file_path = arguments['file_path']
                     # Extract just the filename (remove path if present)
@@ -433,7 +438,7 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                         filename_base = f"{filename_base}.pptx"
                     
                     # Check if presentation exists in storage
-                    create_if_missing = 'create' in tool_name or 'add' in tool_name
+                    create_if_missing = 'create' in tool_name or 'add' in tool_name or 'from_template' in tool_name
                     try:
                         local_path = manager.get_local_path(filename_base, create_if_missing=create_if_missing)
                         arguments['file_path'] = local_path
@@ -451,26 +456,114 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                                 }
                             }
                 
+                # Handle template_path parameter (for template operations)
+                if 'template_path' in arguments:
+                    template_path = arguments['template_path']
+                    # Check if template exists in storage or templates directory
+                    template_filename = os.path.basename(template_path)
+                    if not template_filename.endswith('.pptx'):
+                        template_filename = f"{template_filename}.pptx"
+                    
+                    # Try to find template in storage first
+                    if storage.presentation_exists(template_filename):
+                        local_template_path = manager.get_local_path(template_filename, create_if_missing=False)
+                        arguments['template_path'] = local_template_path
+                    else:
+                        # Check in templates directory or PPT_TEMPLATE_PATH
+                        template_dirs = [
+                            os.getenv('PPT_TEMPLATE_PATH', ''),
+                            '/mnt/disk/presentations/templates',
+                            '/mnt/disk/templates',
+                            './templates',
+                            '.'
+                        ]
+                        template_found = False
+                        for template_dir in template_dirs:
+                            if template_dir and os.path.exists(template_dir):
+                                potential_path = os.path.join(template_dir, template_filename)
+                                if os.path.exists(potential_path):
+                                    arguments['template_path'] = potential_path
+                                    template_found = True
+                                    break
+                                # Also try with original name
+                                potential_path = os.path.join(template_dir, template_path)
+                                if os.path.exists(potential_path):
+                                    arguments['template_path'] = potential_path
+                                    template_found = True
+                                    break
+                        
+                        if not template_found and not os.path.exists(template_path):
+                            # Template not found - will be handled by the tool itself
+                            pass
+                
                 # Call the tool via FastMCP's call_tool method
                 try:
                     # Use FastMCP's internal tool calling mechanism
                     result = await app.call_tool(tool_name, arguments)
                     
-                    # Upload presentation back to storage if it was modified
-                    if local_path and os.path.exists(local_path):
+                    # Track presentation_id to filename mapping
+                    if isinstance(result, dict):
+                        pres_id = result.get('presentation_id')
+                        if pres_id and filename_base:
+                            _presentation_files[pres_id] = filename_base
+                    
+                    # Handle save_presentation - upload to storage
+                    if tool_name == 'save_presentation' and local_path and os.path.exists(local_path):
                         if original_file_path:
                             filename_base = os.path.basename(original_file_path)
                         else:
                             filename_base = os.path.basename(arguments.get('file_path', ''))
                         
-                        # Ensure .pptx extension
                         if filename_base and not filename_base.endswith('.pptx'):
                             filename_base = f"{filename_base}.pptx"
                         
                         if filename_base:
-                            # Save to storage
                             pres_url = manager.save_presentation(local_path, filename_base)
-                            # Enhance result with URL
+                            if isinstance(result, dict) and 'presentation_id' in result:
+                                _presentation_files[result['presentation_id']] = filename_base
+                    
+                    # Auto-save after modifications
+                    modification_tools = [
+                        'add_slide', 'manage_text', 'manage_image', 'add_table', 'format_table_cell',
+                        'add_shape', 'add_chart', 'update_chart_data', 'apply_professional_design',
+                        'apply_picture_effects', 'manage_fonts', 'apply_slide_template',
+                        'create_slide_from_template', 'populate_placeholder', 'add_bullet_points',
+                        'manage_hyperlinks', 'add_connector', 'manage_slide_masters',
+                        'manage_slide_transitions', 'optimize_slide_text'
+                    ]
+                    
+                    if tool_name in modification_tools:
+                        pres_id = arguments.get('presentation_id') or current_presentation_id
+                        if pres_id and pres_id in _presentation_files:
+                            auto_save_filename = _presentation_files[pres_id]
+                            if pres_id in presentations:
+                                import tempfile
+                                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.pptx')
+                                temp_path = temp_file.name
+                                temp_file.close()
+                                try:
+                                    from utils import presentation_utils as ppt_utils
+                                    ppt_utils.save_presentation(presentations[pres_id], temp_path)
+                                    if os.path.exists(temp_path):
+                                        manager.save_presentation(temp_path, auto_save_filename)
+                                        os.unlink(temp_path)
+                                except Exception as e:
+                                    print(f"Warning: Auto-save failed: {e}")
+                                    if os.path.exists(temp_path):
+                                        os.unlink(temp_path)
+                    
+                    # Upload presentation back to storage if file_path was used
+                    if local_path and os.path.exists(local_path) and tool_name != 'save_presentation':
+                        if original_file_path:
+                            filename_base = os.path.basename(original_file_path)
+                        else:
+                            filename_base = os.path.basename(arguments.get('file_path', ''))
+                        
+                        if filename_base and not filename_base.endswith('.pptx'):
+                            filename_base = f"{filename_base}.pptx"
+                        
+                        if filename_base:
+                            pres_url = manager.save_presentation(local_path, filename_base)
                             if isinstance(result, dict):
                                 result['download_url'] = f"{BASE_URL or 'https://office-powerpoint-mcp.onrender.com'}/presentations/{filename_base}"
                                 if 'message' in result:
@@ -516,8 +609,67 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                         else:
                             result = tool_func(**arguments)
                         
-                        # Upload presentation back to storage if it was modified
-                        if local_path and os.path.exists(local_path):
+                        # Track presentation_id to filename mapping for auto-save
+                        if isinstance(result, dict):
+                            pres_id = result.get('presentation_id')
+                            if pres_id and filename_base:
+                                _presentation_files[pres_id] = filename_base
+                        
+                        # Handle save_presentation - upload to storage
+                        if tool_name == 'save_presentation' and local_path and os.path.exists(local_path):
+                            if original_file_path:
+                                filename_base = os.path.basename(original_file_path)
+                            else:
+                                filename_base = os.path.basename(arguments.get('file_path', ''))
+                            
+                            if filename_base and not filename_base.endswith('.pptx'):
+                                filename_base = f"{filename_base}.pptx"
+                            
+                            if filename_base:
+                                # Save to storage
+                                pres_url = manager.save_presentation(local_path, filename_base)
+                                # Update mapping if presentation_id is in result
+                                if isinstance(result, dict) and 'presentation_id' in result:
+                                    _presentation_files[result['presentation_id']] = filename_base
+                        
+                        # Auto-save presentations after modifications (for tools that modify presentations)
+                        modification_tools = [
+                            'add_slide', 'manage_text', 'manage_image', 'add_table', 'format_table_cell',
+                            'add_shape', 'add_chart', 'update_chart_data', 'apply_professional_design',
+                            'apply_picture_effects', 'manage_fonts', 'apply_slide_template',
+                            'create_slide_from_template', 'populate_placeholder', 'add_bullet_points',
+                            'manage_hyperlinks', 'add_connector', 'manage_slide_masters',
+                            'manage_slide_transitions', 'optimize_slide_text'
+                        ]
+                        
+                        if tool_name in modification_tools:
+                            # Get presentation_id from arguments or current
+                            pres_id = arguments.get('presentation_id') or current_presentation_id
+                            if pres_id and pres_id in _presentation_files:
+                                # Get the filename for this presentation
+                                auto_save_filename = _presentation_files[pres_id]
+                                if pres_id in presentations:
+                                    # Save the in-memory presentation to a temp file, then upload
+                                    import tempfile
+                                    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.pptx')
+                                    temp_path = temp_file.name
+                                    temp_file.close()
+                                    
+                                    try:
+                                        from utils import presentation_utils as ppt_utils
+                                        ppt_utils.save_presentation(presentations[pres_id], temp_path)
+                                        if os.path.exists(temp_path):
+                                            # Upload to storage
+                                            manager.save_presentation(temp_path, auto_save_filename)
+                                            # Cleanup
+                                            os.unlink(temp_path)
+                                    except Exception as e:
+                                        print(f"Warning: Auto-save failed for {pres_id}: {e}")
+                                        if os.path.exists(temp_path):
+                                            os.unlink(temp_path)
+                        
+                        # Upload presentation back to storage if file_path was used and file exists
+                        if local_path and os.path.exists(local_path) and tool_name != 'save_presentation':
                             if original_file_path:
                                 filename_base = os.path.basename(original_file_path)
                             else:
